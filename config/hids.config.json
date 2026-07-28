@@ -30,7 +30,8 @@
   "network": {
     "pollIntervalMs": 30000,
     "alertOnNewListener": true,
-    "alertOnOutbound": false
+    "alertOnOutbound": false,
+    "alertOnUdp": false
   },
   "alert": {
     "debounceMs": 45000,

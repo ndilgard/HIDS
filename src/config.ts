@@ -17,6 +17,7 @@ export interface HidsConfig {
 		pollIntervalMs: number;
 		alertOnNewListener: boolean;
 		alertOnOutbound: boolean;
+		alertOnUdp: boolean;
 	};
 	alert: { debounceMs: number; emailOnNewBinary: boolean };
 }
@@ -41,6 +42,7 @@ export function loadConfig(): HidsConfig {
 	raw.dataDir = process.env.HIDS_DATA_DIR ?? raw.dataDir;
 	raw.gmailEnvPath = process.env.HIDS_GMAIL_ENV_PATH ?? raw.gmailEnvPath;
 	raw.fim.watchPaths = raw.fim.watchPaths.map(expandHome);
+	raw.network.alertOnUdp ??= false; // default off — UDP "listeners" are mostly ephemeral app noise (WebRTC/QUIC/DNS)
 
 	return raw;
 }

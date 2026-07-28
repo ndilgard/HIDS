@@ -49,7 +49,18 @@ export function createNetworkModule(ctx: ModuleContext): Module {
 			if (!known.has(key)) {
 				known.add(key);
 				newListeners++;
-				if (!isFirstRun && config.network.alertOnNewListener) {
+				// UDP "listeners" from `ss` include ephemeral bind()-only sockets ordinary apps open
+				// constantly (WebRTC/QUIC/DNS) — a new port number every time, never alert-worthy on
+				// its own. A rogue/backdoor service realistically shows up as a persistent TCP
+				// listener, so only TCP is alert-worthy by default; UDP is still tracked (added to
+				// the baseline above) so it doesn't pile up, just not emailed.
+				const isAlertableProto =
+					listener.proto === "tcp" || config.network.alertOnUdp;
+				if (
+					!isFirstRun &&
+					config.network.alertOnNewListener &&
+					isAlertableProto
+				) {
 					recorder.record({
 						module: "network",
 						severity: "warning",
