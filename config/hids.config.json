@@ -1,0 +1,39 @@
+{
+  "dataDir": "/mnt/omv/HIDS",
+  "gmailEnvPath": "/home/nate/Claude_Code/Projects/HAL/hal-skeleton/credentials/gmail-smtp.env",
+  "web": {
+    "host": "127.0.0.1",
+    "port": 8787
+  },
+  "fim": {
+    "watchPaths": [
+      "~/.ssh",
+      "~/.bashrc",
+      "~/.zshrc",
+      "/etc/passwd",
+      "/home/nate/Claude_Code/Projects/HAL/hal-skeleton/credentials"
+    ],
+    "reconcileIntervalMs": 900000,
+    "debounceMs": 500
+  },
+  "process": {
+    "pollIntervalMs": 10000,
+    "suspiciousDirs": [
+      "/tmp",
+      "/dev/shm",
+      "/var/tmp"
+    ]
+  },
+  "auth": {
+    "reconnectBackoffMs": 5000
+  },
+  "network": {
+    "pollIntervalMs": 30000,
+    "alertOnNewListener": true,
+    "alertOnOutbound": false
+  },
+  "alert": {
+    "debounceMs": 45000,
+    "emailOnNewBinary": false
+  }
+}

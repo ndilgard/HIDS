@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>HIDS Dashboard</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #0d1117;
+    --card: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --ok: #22863a;
+    --warn: #f0a500;
+    --crit: #cb2431;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f6f8fa;
+      --card: #ffffff;
+      --border: #d0d7de;
+      --text: #1f2328;
+      --muted: #57606a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 2rem;
+  }
+  h1 { font-size: 1.4rem; margin: 0 0 1.5rem; }
+  .banner {
+    padding: 1rem 1.25rem;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    margin-bottom: 1.5rem;
+    font-weight: 600;
+  }
+  .banner.clear { border-color: var(--ok); color: var(--ok); }
+  .banner.alerts { border-color: var(--crit); color: var(--crit); }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1rem;
+    margin-bottom: 2rem;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem;
+  }
+  .card .module { font-size: 0.8rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+  .card .result { margin-top: 0.4rem; font-size: 0.95rem; }
+  .card .ts { margin-top: 0.5rem; font-size: 0.75rem; color: var(--muted); }
+  table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+  th, td { text-align: left; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; font-size: 0.8rem; text-transform: uppercase; }
+  .sev-critical { color: var(--crit); font-weight: 600; }
+  .sev-warning { color: var(--warn); font-weight: 600; }
+  .sev-info { color: var(--muted); }
+  .empty { color: var(--muted); padding: 1rem 0; }
+</style>
+</head>
+<body>
+  <h1>HIDS Dashboard</h1>
+  <div id="banner" class="banner clear">Loading…</div>
+  <div id="status" class="grid"></div>
+  <h2>Recent Alerts</h2>
+  <div id="alerts"></div>
+
+<script>
+async function refresh() {
+  const [status, alerts] = await Promise.all([
+    fetch('/api/status').then(r => r.json()),
+    fetch('/api/alerts?limit=50').then(r => r.json()),
+  ]);
+
+  const banner = document.getElementById('banner');
+  const recentAlertCount = alerts.length;
+  if (recentAlertCount === 0) {
+    banner.className = 'banner clear';
+    banner.textContent = 'Clear — no alerts recorded';
+  } else {
+    banner.className = 'banner alerts';
+    banner.textContent = `${recentAlertCount} alert(s) on record`;
+  }
+
+  const statusDiv = document.getElementById('status');
+  statusDiv.innerHTML = status.map(s => `
+    <div class="card">
+      <div class="module">${s.module}</div>
+      <div class="result">${s.last_result}</div>
+      <div class="ts">${new Date(s.last_scan_ts).toLocaleString()}</div>
+    </div>
+  `).join('') || '<div class="empty">No scans recorded yet.</div>';
+
+  const alertsDiv = document.getElementById('alerts');
+  if (alerts.length === 0) {
+    alertsDiv.innerHTML = '<div class="empty">No alerts.</div>';
+  } else {
+    alertsDiv.innerHTML = `
+      <table>
+        <thead><tr><th>Time</th><th>Module</th><th>Severity</th><th>Summary</th></tr></thead>
+        <tbody>
+          ${alerts.map(a => `
+            <tr>
+              <td>${new Date(a.ts).toLocaleString()}</td>
+              <td>${a.module}</td>
+              <td class="sev-${a.severity}">${a.severity}</td>
+              <td>${a.summary}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    `;
+  }
+}
+
+refresh();
+setInterval(refresh, 10000);
+</script>
+</body>
+</html>

@@ -1,0 +1,19 @@
+{
+  "name": "hids",
+  "version": "0.1.0",
+  "description": "Custom lightweight Host Intrusion Detection System",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "cli": "bun src/cli.ts",
+    "daemon": "bun src/daemon.ts",
+    "dev": "bun --watch src/daemon.ts"
+  },
+  "dependencies": {
+    "nodemailer": "^6.9.0"
+  },
+  "devDependencies": {
+    "@types/nodemailer": "^6.4.0",
+    "@types/bun": "latest"
+  }
+}
