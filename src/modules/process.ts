@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync, readlinkSync } from "node:fs";
 import { upsertScanStatus } from "../state/history-db.ts";
 import { readJson, writeJsonAtomic } from "../state/json-store.ts";
+import { checkSuspiciousExePath } from "./suspicious-process.ts";
 import type { Module, ModuleContext } from "./types.ts";
 
 interface ProcInfo {
@@ -51,7 +52,17 @@ export function createProcessModule(ctx: ModuleContext): Module {
 		for (const proc of procs) {
 			if (!proc.exePath) continue;
 
-			if (proc.deleted) {
+			// proc.exePath is already the resolved (deleted-suffix-stripped) path; re-run through the
+			// exePath+" (deleted)" form when it was deleted so the shared check sees the same signal.
+			const checkInput = proc.deleted
+				? `${proc.exePath} (deleted)`
+				: proc.exePath;
+			const check = checkSuspiciousExePath(
+				checkInput,
+				config.process.suspiciousDirs,
+			);
+
+			if (check.reason === "deleted") {
 				recorder.record({
 					module: "process",
 					severity: "critical",
@@ -60,11 +71,7 @@ export function createProcessModule(ctx: ModuleContext): Module {
 				});
 				continue;
 			}
-
-			const isSuspiciousDir = config.process.suspiciousDirs.some((dir) =>
-				proc.exePath!.startsWith(dir),
-			);
-			if (isSuspiciousDir) {
+			if (check.reason === "suspicious-path") {
 				recorder.record({
 					module: "process",
 					severity: "critical",

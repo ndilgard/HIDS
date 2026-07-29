@@ -1,6 +1,9 @@
-import { readlinkSync } from "node:fs";
 import { upsertScanStatus } from "../state/history-db.ts";
 import { readJson, writeJsonAtomic } from "../state/json-store.ts";
+import {
+	checkSuspiciousExePath,
+	resolveExePath,
+} from "./suspicious-process.ts";
 import type { Module, ModuleContext } from "./types.ts";
 
 // Linux default ephemeral port range (net.ipv4.ip_local_port_range). This is where WebRTC/QUIC
@@ -25,6 +28,13 @@ interface Listener {
 	process: string;
 }
 
+interface OutboundConn {
+	proto: string;
+	localAddress: string;
+	peerAddress: string;
+	process: string;
+}
+
 function extractPort(localAddress: string): number | null {
 	const parts = localAddress.split(":");
 	const port = Number(parts[parts.length - 1]);
@@ -34,14 +44,6 @@ function extractPort(localAddress: string): number | null {
 function extractPid(processField: string): number | null {
 	const match = processField.match(/pid=(\d+)/);
 	return match ? Number(match[1]) : null;
-}
-
-function resolveExePath(pid: number): string | null {
-	try {
-		return readlinkSync(`/proc/${pid}/exe`);
-	} catch {
-		return null; // process exited between listing and resolving, or not our user
-	}
 }
 
 function parseListeners(output: string): Listener[] {
@@ -62,15 +64,100 @@ function listenerKey(l: Listener): string {
 	return `${l.proto}:${l.localAddress}`;
 }
 
-function countEstablished(output: string): number {
-	return output.split("\n").filter((l) => l.trim() && !l.startsWith("State"))
-		.length;
+/** `ss -tnp state established` — no Netid column (already tcp-only): RecvQ SendQ Local Peer Process */
+function parseEstablishedTcp(output: string): OutboundConn[] {
+	const lines = output.split("\n").slice(1);
+	const conns: OutboundConn[] = [];
+	for (const line of lines) {
+		if (!line.trim()) continue;
+		const fields = line.trim().split(/\s+/);
+		const [, , localAddress, peerAddress] = fields;
+		if (!localAddress || !peerAddress) continue;
+		conns.push({
+			proto: "tcp",
+			localAddress,
+			peerAddress,
+			process: fields.slice(4).join(" "),
+		});
+	}
+	return conns;
+}
+
+/** `ss -unp` — same layout, but UDP is connectionless so most rows show peer `*:*` (bind-only,
+ * already covered by the listener check above); only rows with a real peer represent a UDP
+ * socket actually talking somewhere. */
+function parseConnectedUdp(output: string): OutboundConn[] {
+	const lines = output.split("\n").slice(1);
+	const conns: OutboundConn[] = [];
+	for (const line of lines) {
+		if (!line.trim()) continue;
+		const fields = line.trim().split(/\s+/);
+		const [localAddress, peerAddress] = fields;
+		if (!localAddress || !peerAddress || peerAddress === "*:*") continue;
+		conns.push({
+			proto: "udp",
+			localAddress,
+			peerAddress,
+			process: fields.slice(2).join(" "),
+		});
+	}
+	return conns;
 }
 
 export function createNetworkModule(ctx: ModuleContext): Module {
 	const { config, db, recorder } = ctx;
 	const baselinePath = `${config.dataDir}/baseline-network.json`;
+	const outboundFirstSeenPath = `${config.dataDir}/outbound-first-seen.json`;
 	let timer: ReturnType<typeof setInterval> | null = null;
+
+	function checkOutbound(
+		conns: OutboundConn[],
+		isFirstOutboundRun: boolean,
+	): number {
+		const firstSeen = readJson<Record<string, true>>(outboundFirstSeenPath, {});
+		let newExePaths = 0;
+
+		for (const conn of conns) {
+			const pid = extractPid(conn.process);
+			const exePath = pid !== null ? resolveExePath(pid) : null;
+			if (!exePath) continue; // process exited between listing and resolving — can't attribute
+
+			// Layer 1: a process already suspicious for existing (deleted binary / suspicious path) is
+			// ALWAYS alert-worthy the moment it talks to the network, no dedup — same as process.ts
+			// never lets a suspicious binary go quiet just because we've seen it before.
+			const suspicious = checkSuspiciousExePath(
+				exePath,
+				config.process.suspiciousDirs,
+			);
+			if (suspicious.suspicious) {
+				recorder.record({
+					module: "network",
+					severity: "critical",
+					summary: `Suspicious process (${suspicious.reason}) made an outbound connection: ${exePath} -> ${conn.peerAddress} (${conn.proto})`,
+					detail: conn,
+				});
+				continue;
+			}
+
+			// Layer 2: first-ever outbound connection from this exe path. Alert once, then absorb —
+			// ordinary browser/app traffic from an already-seen binary isn't a repeat finding.
+			if (!firstSeen[exePath]) {
+				firstSeen[exePath] = true;
+				newExePaths++;
+				if (!isFirstOutboundRun) {
+					recorder.record({
+						module: "network",
+						severity: "warning",
+						summary: `New process making outbound connections: ${exePath} -> ${conn.peerAddress} (${conn.proto})`,
+						detail: conn,
+					});
+				}
+			}
+		}
+
+		writeJsonAtomic(outboundFirstSeenPath, firstSeen);
+		return newExePaths;
+	}
 
 	async function scanNow(): Promise<void> {
 		const known = new Set(readJson<string[]>(baselinePath, []));
@@ -141,12 +228,21 @@ export function createNetworkModule(ctx: ModuleContext): Module {
 		writeJsonAtomic(baselinePath, [...known]);
 		writeJsonAtomic(ephemeralUdpCountsPath, ephemeralUdpCounts);
 
-		// Outbound connections: checked for visibility, deliberately not persisted or alert-diffed —
-		// normal desktop use opens/closes connections constantly, too noisy to be alert-worthy.
-		let establishedCount = 0;
+		// Outbound: C2/exfil/tunneling checks — see checkOutbound() for the two-layer design.
+		let outboundNewExePaths = 0;
+		let outboundConnCount = 0;
 		if (config.network.alertOnOutbound) {
-			const estResult = Bun.spawnSync(["ss", "-tnp", "state", "established"]);
-			establishedCount = countEstablished(estResult.stdout.toString());
+			const isFirstOutboundRun =
+				Object.keys(readJson<Record<string, true>>(outboundFirstSeenPath, {}))
+					.length === 0;
+			const tcpResult = Bun.spawnSync(["ss", "-tnp", "state", "established"]);
+			const udpResult = Bun.spawnSync(["ss", "-unp"]);
+			const conns = [
+				...parseEstablishedTcp(tcpResult.stdout.toString()),
+				...parseConnectedUdp(udpResult.stdout.toString()),
+			];
+			outboundConnCount = conns.length;
+			outboundNewExePaths = checkOutbound(conns, isFirstOutboundRun);
 		}
 
 		upsertScanStatus(
@@ -154,7 +250,11 @@ export function createNetworkModule(ctx: ModuleContext): Module {
 			"network",
 			isFirstRun
 				? `baseline created (${listeners.length} listeners)`
-				: `ok (${listeners.length} listeners, +${newListeners} new${config.network.alertOnOutbound ? `, ${establishedCount} established` : ""})`,
+				: `ok (${listeners.length} listeners, +${newListeners} new${
+						config.network.alertOnOutbound
+							? `, ${outboundConnCount} outbound, +${outboundNewExePaths} new processes`
+							: ""
+					})`,
 		);
 	}
 
