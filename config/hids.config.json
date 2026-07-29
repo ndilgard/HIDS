@@ -41,6 +41,7 @@
   "heartbeat": {
     "enabled": true,
     "url": "https://hc-ping.com/3907e4a2-8d2c-4ea4-b2ca-c9164338299b",
-    "intervalMs": 120000
+    "intervalMs": 120000,
+    "apiKey": "hcr_psceCNA9L6CRk4hjsHbz6bZFbcjZ"
   }
 }

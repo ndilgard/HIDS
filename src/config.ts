@@ -21,7 +21,15 @@ export interface HidsConfig {
 		alertOnUdp: boolean;
 	};
 	alert: { debounceMs: number; emailOnNewBinary: boolean };
-	heartbeat: { enabled: boolean; url: string; intervalMs: number };
+	heartbeat: {
+		enabled: boolean;
+		url: string;
+		intervalMs: number;
+		/** Read-only API key for polling healthchecks.io's own view of this check (up/down/grace)
+		 * onto the local dashboard. Optional — the ping itself (and its alerting) works without it;
+		 * this only feeds the dashboard's remote-status card. */
+		apiKey?: string;
+	};
 }
 
 const CONFIG_PATH = join(import.meta.dir, "..", "config", "hids.config.json");

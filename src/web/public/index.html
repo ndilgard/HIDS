@@ -42,6 +42,14 @@
   }
   .banner.clear { border-color: var(--ok); color: var(--ok); }
   .banner.alerts { border-color: var(--crit); color: var(--crit); }
+  .banner.remote { display: flex; justify-content: space-between; align-items: center; font-weight: 400; }
+  .banner.remote .label { font-weight: 600; }
+  .banner.remote.up { border-color: var(--ok); }
+  .banner.remote.up .label { color: var(--ok); }
+  .banner.remote.grace, .banner.remote.down { border-color: var(--crit); }
+  .banner.remote.grace .label, .banner.remote.down .label { color: var(--crit); }
+  .banner.remote.unknown { border-color: var(--muted); }
+  .banner.remote.unknown .label { color: var(--muted); }
   .grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -69,16 +77,34 @@
 <body>
   <h1>HIDS Dashboard</h1>
   <div id="banner" class="banner clear">Loading…</div>
+  <div id="remote-banner" class="banner remote unknown" style="display:none"></div>
   <div id="status" class="grid"></div>
   <h2>Recent Alerts</h2>
   <div id="alerts"></div>
 
 <script>
 async function refresh() {
-  const [status, alerts] = await Promise.all([
+  const [status, alerts, remote] = await Promise.all([
     fetch('/api/status').then(r => r.json()),
     fetch('/api/alerts?limit=50').then(r => r.json()),
+    fetch('/api/heartbeat-remote').then(r => r.json()),
   ]);
+
+  const remoteBanner = document.getElementById('remote-banner');
+  if (!remote.configured) {
+    remoteBanner.style.display = 'none';
+  } else {
+    remoteBanner.style.display = 'flex';
+    if (remote.error) {
+      remoteBanner.className = 'banner remote unknown';
+      remoteBanner.innerHTML = `<span class="label">Healthchecks.io: unavailable</span><span>${remote.error}</span>`;
+    } else {
+      const statusClass = remote.status === 'up' ? 'up' : (remote.status === 'grace' || remote.status === 'down') ? 'down' : 'unknown';
+      const lastPing = remote.last_ping ? new Date(remote.last_ping).toLocaleString() : 'never';
+      remoteBanner.className = `banner remote ${statusClass}`;
+      remoteBanner.innerHTML = `<span class="label">Healthchecks.io: ${remote.status.toUpperCase()}</span><span>Last ping: ${lastPing}</span>`;
+    }
+  }
 
   const banner = document.getElementById('banner');
   const recentAlertCount = alerts.length;

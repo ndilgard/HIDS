@@ -37,6 +37,7 @@
   "heartbeat": {
     "enabled": true,
     "url": "https://hc-ping.com/YOUR-CHECK-UUID-HERE",
-    "intervalMs": 120000
+    "intervalMs": 120000,
+    "apiKey": "YOUR-READ-ONLY-API-KEY-HERE"
   }
 }
