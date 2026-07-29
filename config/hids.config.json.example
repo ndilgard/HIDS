@@ -14,7 +14,8 @@
       "/home/nate/Claude_Code/Projects/HAL/hal-skeleton/credentials"
     ],
     "reconcileIntervalMs": 900000,
-    "debounceMs": 500
+    "debounceMs": 500,
+    "watchTrustedProcessBinaries": true
   },
   "process": {
     "pollIntervalMs": 10000,

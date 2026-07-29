@@ -64,12 +64,53 @@ function buildBaseline(watchPaths: string[]): Baseline {
 	return baseline;
 }
 
+/**
+ * Every binary the network module has ever trusted (outbound-first-seen.json's top-level keys) —
+ * closes the "trust once forever" gap's tampering half: even after the network layer has gone
+ * permanently quiet on a binary, FIM keeps hashing it and alerts if its content ever changes.
+ * Only reads the key set, not the (now nested, per-destination) values, so this stays unaffected
+ * by how network.ts structures its own trust data internally.
+ */
+function getTrustedProcessPaths(dataDir: string): string[] {
+	const firstSeen = readJson<Record<string, unknown>>(
+		`${dataDir}/outbound-first-seen.json`,
+		{},
+	);
+	return Object.keys(firstSeen).filter((p) => {
+		try {
+			return statSync(p).isFile();
+		} catch {
+			return false; // app since uninstalled — nothing to hash, not an error
+		}
+	});
+}
+
 export function createFimModule(ctx: ModuleContext): Module {
 	const { config, db, recorder } = ctx;
 	const baselinePath = `${config.dataDir}/baseline-fim.json`;
 	const watchers: FSWatcher[] = [];
 	const debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
+	const watchedTrustedPaths = new Set<string>();
 	let reconcileTimer: ReturnType<typeof setInterval> | null = null;
+
+	/**
+	 * Trusted-process paths accumulate over time as the network module discovers new binaries —
+	 * called from scanNow() (so it naturally re-runs on every debounced/periodic scan) to pick up
+	 * real-time fs.watch coverage for anything newly trusted since the daemon started, rather than
+	 * waiting for the next 15-minute reconcile to notice a change.
+	 */
+	function watchNewTrustedPaths(paths: string[]): void {
+		for (const path of paths) {
+			if (watchedTrustedPaths.has(path)) continue;
+			try {
+				const watcher = watch(path, () => scheduleDebouncedScan(path));
+				watchers.push(watcher);
+				watchedTrustedPaths.add(path);
+			} catch (err) {
+				console.warn(`[fim] failed to watch trusted binary ${path}:`, err);
+			}
+		}
+	}
 
 	function reportUnreadablePaths(): void {
 		for (const root of config.fim.watchPaths) {
@@ -83,7 +124,16 @@ export function createFimModule(ctx: ModuleContext): Module {
 		const oldBaseline = readJson<Baseline>(baselinePath, {});
 		const isFirstRun =
 			Object.keys(oldBaseline).length === 0 && !existsSync(baselinePath);
-		const newBaseline = buildBaseline(config.fim.watchPaths);
+
+		const trustedProcessPaths = config.fim.watchTrustedProcessBinaries
+			? getTrustedProcessPaths(config.dataDir)
+			: [];
+		const trustedPathSet = new Set(trustedProcessPaths);
+		watchNewTrustedPaths(trustedProcessPaths);
+		const newBaseline = buildBaseline([
+			...config.fim.watchPaths,
+			...trustedProcessPaths,
+		]);
 
 		if (!isFirstRun) {
 			const oldPaths = new Set(Object.keys(oldBaseline));
@@ -101,6 +151,12 @@ export function createFimModule(ctx: ModuleContext): Module {
 			}
 			for (const path of newPaths) {
 				if (!oldPaths.has(path)) {
+					if (trustedPathSet.has(path)) {
+						// Not a new file on disk — FIM is just catching up to watch a binary the
+						// network module started trusting. Onboard silently, same as any other
+						// baseline-seeding event elsewhere in this project.
+						continue;
+					}
 					recorder.record({
 						module: "fim",
 						severity: "warning",
@@ -108,16 +164,29 @@ export function createFimModule(ctx: ModuleContext): Module {
 						detail: { path, current: newBaseline[path] },
 					});
 				} else if (oldBaseline[path]!.hash !== newBaseline[path]!.hash) {
-					recorder.record({
-						module: "fim",
-						severity: "critical",
-						summary: `Watched file modified: ${path}`,
-						detail: {
-							path,
-							previous: oldBaseline[path],
-							current: newBaseline[path],
-						},
-					});
+					if (trustedPathSet.has(path)) {
+						recorder.record({
+							module: "fim",
+							severity: "critical",
+							summary: `Trusted process binary changed since last verified — possible tampering: ${path}`,
+							detail: {
+								path,
+								previous: oldBaseline[path],
+								current: newBaseline[path],
+							},
+						});
+					} else {
+						recorder.record({
+							module: "fim",
+							severity: "critical",
+							summary: `Watched file modified: ${path}`,
+							detail: {
+								path,
+								previous: oldBaseline[path],
+								current: newBaseline[path],
+							},
+						});
+					}
 				}
 			}
 		}
@@ -160,6 +229,7 @@ export function createFimModule(ctx: ModuleContext): Module {
 	function stop(): void {
 		for (const w of watchers) w.close();
 		watchers.length = 0;
+		watchedTrustedPaths.clear();
 		for (const t of debounceTimers.values()) clearTimeout(t);
 		debounceTimers.clear();
 		if (reconcileTimer) clearInterval(reconcileTimer);

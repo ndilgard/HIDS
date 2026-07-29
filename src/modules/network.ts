@@ -46,6 +46,16 @@ function extractPid(processField: string): number | null {
 	return match ? Number(match[1]) : null;
 }
 
+/** Strips the port, handling both "1.2.3.4:443" and bracketed IPv6 "[2606:...]:443". */
+function extractDestinationHost(peerAddress: string): string {
+	if (peerAddress.startsWith("[")) {
+		const closeIdx = peerAddress.indexOf("]");
+		return closeIdx === -1 ? peerAddress : peerAddress.slice(1, closeIdx);
+	}
+	const idx = peerAddress.lastIndexOf(":");
+	return idx === -1 ? peerAddress : peerAddress.slice(0, idx);
+}
+
 function parseListeners(output: string): Listener[] {
 	const lines = output.split("\n").slice(1); // drop header
 	const listeners: Listener[] = [];
@@ -114,8 +124,18 @@ export function createNetworkModule(ctx: ModuleContext): Module {
 		conns: OutboundConn[],
 		isFirstOutboundRun: boolean,
 	): number {
-		const firstSeen = readJson<Record<string, true>>(outboundFirstSeenPath, {});
-		let newExePaths = 0;
+		// Trust is keyed by (exePath, destinationHost), not exePath alone — this is what closes the
+		// "trust once forever" gap for a binary that's compromised via process injection (no file
+		// ever changes, so FIM's tampering check can't catch it) but starts reaching new
+		// infrastructure. Every new destination for a binary alerts, no matter how long that binary
+		// has been trusted — deliberately no repetition threshold or subnet grouping here (see the
+		// plan notes: CDN edge-IP churn could reintroduce noise, but that gets tuned against real
+		// observed noise if/when it actually happens, not pre-guessed away).
+		const firstSeen = readJson<Record<string, Record<string, true>>>(
+			outboundFirstSeenPath,
+			{},
+		);
+		let newPairs = 0;
 
 		for (const conn of conns) {
 			const pid = extractPid(conn.process);
@@ -139,16 +159,24 @@ export function createNetworkModule(ctx: ModuleContext): Module {
 				continue;
 			}
 
-			// Layer 2: first-ever outbound connection from this exe path. Alert once, then absorb —
-			// ordinary browser/app traffic from an already-seen binary isn't a repeat finding.
-			if (!firstSeen[exePath]) {
-				firstSeen[exePath] = true;
-				newExePaths++;
+			// Layer 2: first-ever connection from this exe path to this specific destination.
+			const destinationHost = extractDestinationHost(conn.peerAddress);
+			const isNewBinary = !firstSeen[exePath];
+			const isNewDestination =
+				isNewBinary || !firstSeen[exePath]![destinationHost];
+
+			if (isNewDestination) {
+				firstSeen[exePath] ??= {};
+				firstSeen[exePath]![destinationHost] = true;
+				newPairs++;
 				if (!isFirstOutboundRun) {
+					const summary = isNewBinary
+						? `New process making outbound connections: ${exePath} -> ${conn.peerAddress} (${conn.proto})`
+						: `Known process contacting a new destination: ${exePath} -> ${conn.peerAddress} (${conn.proto})`;
 					recorder.record({
 						module: "network",
 						severity: "warning",
-						summary: `New process making outbound connections: ${exePath} -> ${conn.peerAddress} (${conn.proto})`,
+						summary,
 						detail: conn,
 					});
 				}
@@ -156,7 +184,7 @@ export function createNetworkModule(ctx: ModuleContext): Module {
 		}
 
 		writeJsonAtomic(outboundFirstSeenPath, firstSeen);
-		return newExePaths;
+		return newPairs;
 	}
 
 	async function scanNow(): Promise<void> {
@@ -229,12 +257,16 @@ export function createNetworkModule(ctx: ModuleContext): Module {
 		writeJsonAtomic(ephemeralUdpCountsPath, ephemeralUdpCounts);
 
 		// Outbound: C2/exfil/tunneling checks — see checkOutbound() for the two-layer design.
-		let outboundNewExePaths = 0;
+		let outboundNewPairs = 0;
 		let outboundConnCount = 0;
 		if (config.network.alertOnOutbound) {
 			const isFirstOutboundRun =
-				Object.keys(readJson<Record<string, true>>(outboundFirstSeenPath, {}))
-					.length === 0;
+				Object.keys(
+					readJson<Record<string, Record<string, true>>>(
+						outboundFirstSeenPath,
+						{},
+					),
+				).length === 0;
 			const tcpResult = Bun.spawnSync(["ss", "-tnp", "state", "established"]);
 			const udpResult = Bun.spawnSync(["ss", "-unp"]);
 			const conns = [
@@ -242,7 +274,7 @@ export function createNetworkModule(ctx: ModuleContext): Module {
 				...parseConnectedUdp(udpResult.stdout.toString()),
 			];
 			outboundConnCount = conns.length;
-			outboundNewExePaths = checkOutbound(conns, isFirstOutboundRun);
+			outboundNewPairs = checkOutbound(conns, isFirstOutboundRun);
 		}
 
 		upsertScanStatus(
@@ -252,7 +284,7 @@ export function createNetworkModule(ctx: ModuleContext): Module {
 				? `baseline created (${listeners.length} listeners)`
 				: `ok (${listeners.length} listeners, +${newListeners} new${
 						config.network.alertOnOutbound
-							? `, ${outboundConnCount} outbound, +${outboundNewExePaths} new processes`
+							? `, ${outboundConnCount} outbound, +${outboundNewPairs} new process/destination pairs`
 							: ""
 					})`,
 		);
