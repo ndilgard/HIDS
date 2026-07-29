@@ -56,6 +56,34 @@ function extractDestinationHost(peerAddress: string): string {
 	return idx === -1 ? peerAddress : peerAddress.slice(0, idx);
 }
 
+/** Expands "::" shorthand to the full 8 hextets, so a subnet prefix can be read positionally
+ * regardless of where the compression happened (e.g. "2600:1901:0:92a9::" vs "2001::1234:5678"). */
+function expandIpv6(address: string): string[] {
+	const [head, tail] = address.split("::");
+	const headParts = head ? head.split(":").filter(Boolean) : [];
+	const tailParts = tail ? tail.split(":").filter(Boolean) : [];
+	if (tail === undefined) return headParts; // no "::" present, already fully expanded
+	const missing = 8 - headParts.length - tailParts.length;
+	return [...headParts, ...Array(Math.max(missing, 0)).fill("0"), ...tailParts];
+}
+
+/** Groups a destination IP down to a /24 (IPv4) or /48 (IPv6) subnet key. CDNs (Google, Akamai,
+ * GitHub, Azure, etc.) hand a client a different edge IP within the same subnet on practically
+ * every connection — tracking trust at the exact-IP level turns that normal churn into a constant
+ * stream of "new destination" alerts. Subnet-level grouping is the fix shape flagged as the
+ * likely-needed follow-up when this design was first built (see the outbound Layer 2 design notes
+ * above); this is that follow-up, applied against the CDN noise actually observed in practice
+ * rather than pre-guessed. A genuinely new destination in an already-trusted /24 or /48 still
+ * won't alert — that's the accepted tradeoff for killing this specific noise source.
+ */
+function toSubnetKey(destinationHost: string): string {
+	if (destinationHost.includes(":")) {
+		return expandIpv6(destinationHost).slice(0, 3).join(":");
+	}
+	const octets = destinationHost.split(".");
+	return octets.length === 4 ? octets.slice(0, 3).join(".") : destinationHost;
+}
+
 function parseListeners(output: string): Listener[] {
 	const lines = output.split("\n").slice(1); // drop header
 	const listeners: Listener[] = [];
@@ -126,13 +154,14 @@ export function createNetworkModule(ctx: ModuleContext): Module {
 		conns: OutboundConn[],
 		isFirstOutboundRun: boolean,
 	): number {
-		// Trust is keyed by (exePath, destinationHost), not exePath alone — this is what closes the
-		// "trust once forever" gap for a binary that's compromised via process injection (no file
-		// ever changes, so FIM's tampering check can't catch it) but starts reaching new
-		// infrastructure. Every new destination for a binary alerts, no matter how long that binary
-		// has been trusted — deliberately no repetition threshold or subnet grouping here (see the
-		// plan notes: CDN edge-IP churn could reintroduce noise, but that gets tuned against real
-		// observed noise if/when it actually happens, not pre-guessed away).
+		// Trust is keyed by (exePath, destination subnet), not exePath alone — this is what closes
+		// the "trust once forever" gap for a binary that's compromised via process injection (no
+		// file ever changes, so FIM's tampering check can't catch it) but starts reaching new
+		// infrastructure. Every new destination subnet for a binary alerts, no matter how long that
+		// binary has been trusted. Grouped by /24 (v4) or /48 (v6) rather than exact IP — CDN edge-IP
+		// churn turned out to be a real noise source in practice (Firefox/Citrix reconnecting to
+		// rotating Google/Akamai/GitHub/Azure edge IPs for the same services), so this was tuned
+		// against that observed noise rather than pre-guessed away. See toSubnetKey() above.
 		const firstSeen = readJson<Record<string, Record<string, true>>>(
 			outboundFirstSeenPath,
 			{},
@@ -161,15 +190,15 @@ export function createNetworkModule(ctx: ModuleContext): Module {
 				continue;
 			}
 
-			// Layer 2: first-ever connection from this exe path to this specific destination.
+			// Layer 2: first-ever connection from this exe path to this destination's subnet.
 			const destinationHost = extractDestinationHost(conn.peerAddress);
+			const subnetKey = toSubnetKey(destinationHost);
 			const isNewBinary = !firstSeen[exePath];
-			const isNewDestination =
-				isNewBinary || !firstSeen[exePath]![destinationHost];
+			const isNewDestination = isNewBinary || !firstSeen[exePath]![subnetKey];
 
 			if (isNewDestination) {
 				firstSeen[exePath] ??= {};
-				firstSeen[exePath]![destinationHost] = true;
+				firstSeen[exePath]![subnetKey] = true;
 				newPairs++;
 				if (!isFirstOutboundRun) {
 					const summary = isNewBinary
