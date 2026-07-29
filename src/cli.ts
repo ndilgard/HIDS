@@ -16,11 +16,17 @@ const BASELINE_FILES: Record<string, string | null> = {
 	auth: null, // event-driven, no baseline file
 };
 
+/**
+ * Deliberately no real mailer here: `scan-now`/`init` are for manual, local inspection — only the
+ * persistent daemon should ever dispatch real alert emails. Findings still get recorded to
+ * alerts.jsonl (visible via `hids alerts`) so a manual scan is still useful, they just don't
+ * trigger a live page. `test-email` builds its own mailer separately since sending is the whole
+ * point of that command.
+ */
 function buildContext() {
 	const config = loadConfig();
 	const db = openHistoryDb(config.dataDir);
-	const mailer = safeCreateMailer(createMailer, config.gmailEnvPath);
-	const recorder = new AlertRecorder(db, mailer, config.alert.debounceMs);
+	const recorder = new AlertRecorder(db, null, config.alert.debounceMs);
 	return { config, db, recorder };
 }
 
@@ -68,6 +74,10 @@ async function cmdInit(args: string[]) {
 		await modules[name]!.scanNow();
 	}
 	console.log("Done.");
+	// Explicit exit: with no real mailer there's nothing worth lingering for, but the alert
+	// recorder's debounce timer would otherwise keep this process alive for up to debounceMs
+	// doing nothing — don't leave a silent background process hanging around after a manual scan.
+	process.exit(0);
 }
 
 async function cmdScanNow(args: string[]) {
@@ -79,6 +89,7 @@ async function cmdScanNow(args: string[]) {
 		await modules[name]!.scanNow();
 	}
 	console.log("Scan complete. See `hids alerts` for any findings.");
+	process.exit(0);
 }
 
 function cmdStatus() {
@@ -173,7 +184,8 @@ async function main() {
 
 Commands:
   init [module] [--force]   Build baseline (fim/process/network; auth has none)
-  scan-now [module]         Run a one-off scan now
+  scan-now [module]         Run a one-off scan now (recorded to \`alerts\`, does not send email —
+                            only the daemon sends real alert emails)
   status                    Show last-scan status per module
   alerts [--since] [--module]  List recorded alerts
   config                    Print resolved config

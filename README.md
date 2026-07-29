@@ -11,8 +11,13 @@ Custom lightweight Host Intrusion Detection System for a single personal Linux P
   allowlist silently (no email, keeps this the noisy case in the polling world).
 - **Auth** — streams `journalctl -f`; failed SSH logins, accepted SSH logins, and failed sudo
   attempts are always alert-worthy.
-- **Network** — polls `ss -tulnp` every 30s; new listening ports are alert-worthy. Outbound
-  connections are checked but not persisted/alerted (too noisy on a normal desktop).
+- **Network** — polls every 30s. Listening ports (`ss -tulnp`): new TCP listeners always alert;
+  new UDP listeners only alert after fewer than 3 distinct ephemeral ports have been seen from that
+  process (kills WebRTC/QUIC noise without blinding detection to an unrecognized process).
+  Outbound connections (`ss -tnp state established` + `ss -unp`): a process already flagged
+  suspicious (deleted binary / running from `/tmp`, `/dev/shm`, `/var/tmp`) always alerts the
+  moment it talks to the network; any other binary's first-ever outbound connection alerts once,
+  then goes quiet for that binary.
 
 **Only real triggers ever touch disk** — routine scans that find nothing are never persisted, so
 there's no retention/rotation job to maintain. All runtime data (baselines + the alerts database)
@@ -44,7 +49,7 @@ does not need to be re-run. Verify anytime with `loginctl show-user nate --prope
 | Command | What it does |
 |---|---|
 | `hids init [module] [--force]` | Build/rebuild a baseline (fim/process/network; auth has none) |
-| `hids scan-now [module]` | Run a one-off scan immediately, no daemon needed |
+| `hids scan-now [module]` | Run a one-off scan immediately, no daemon needed — records to `alerts` but never sends real email, only the daemon does |
 | `hids status` | Last-scan time + result per module |
 | `hids alerts [--since] [--module]` | List recorded alerts |
 | `hids config` | Print resolved config |
