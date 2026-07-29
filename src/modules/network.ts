@@ -102,13 +102,15 @@ function parseConnectedUdp(output: string): OutboundConn[] {
 	for (const line of lines) {
 		if (!line.trim()) continue;
 		const fields = line.trim().split(/\s+/);
-		const [localAddress, peerAddress] = fields;
+		// `ss -unp` has the same RecvQ/SendQ leading columns as `ss -tnp` — fields[0]/[1] are queue
+		// sizes (usually "0"), not addresses. Indices 2/3 are Local/Peer, matching parseEstablishedTcp.
+		const [, , localAddress, peerAddress] = fields;
 		if (!localAddress || !peerAddress || peerAddress === "*:*") continue;
 		conns.push({
 			proto: "udp",
 			localAddress,
 			peerAddress,
-			process: fields.slice(2).join(" "),
+			process: fields.slice(4).join(" "),
 		});
 	}
 	return conns;
