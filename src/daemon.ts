@@ -9,7 +9,6 @@ import { createNetworkModule } from "./modules/network.ts";
 import { createProcessModule } from "./modules/process.ts";
 import type { Module } from "./modules/types.ts";
 import { openHistoryDb } from "./state/history-db.ts";
-import { startDashboard } from "./web/server.ts";
 
 async function waitForDataDir(
 	dataDir: string,
@@ -55,8 +54,6 @@ async function main() {
 		console.log(`[daemon] starting ${name} module`);
 		mod.start();
 	}
-
-	startDashboard(db, config);
 
 	const shutdown = () => {
 		console.log("[daemon] shutting down");

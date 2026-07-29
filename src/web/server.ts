@@ -5,7 +5,32 @@ import {
 	getAlerts,
 	getScanStatus,
 	type HistoryStore,
+	type ScanStatus,
 } from "../state/history-db.ts";
+
+/** Modules with a genuinely fixed, short poll interval — the only reliable signal that the
+ * detection daemon (not just this dashboard process) is actually still alive and scanning. FIM's
+ * reconcile pass is 15 minutes and only reruns on a config change or a real file event, and auth's
+ * journalctl stream only updates its timestamp on (re)connect, not per line watched — both can sit
+ * "stale" for hours while working perfectly normally, so neither belongs in this check. */
+const LIVENESS_MODULES = ["process", "network", "heartbeat"];
+const LIVENESS_STALE_MS = 5 * 60 * 1000; // 5 minutes — comfortably more than 3x the slowest of the three (heartbeat, 2 min)
+
+function computeLiveness(statuses: (ScanStatus & { module: string })[]) {
+	const relevant = statuses.filter((s) => LIVENESS_MODULES.includes(s.module));
+	if (relevant.length === 0) {
+		return { aliveAsOf: null, staleMs: null, likelyDown: true };
+	}
+	const mostRecentMs = Math.max(
+		...relevant.map((s) => new Date(s.last_scan_ts).getTime()),
+	);
+	const staleMs = Date.now() - mostRecentMs;
+	return {
+		aliveAsOf: new Date(mostRecentMs).toISOString(),
+		staleMs,
+		likelyDown: staleMs > LIVENESS_STALE_MS,
+	};
+}
 
 const INDEX_HTML_PATH = join(import.meta.dir, "public", "index.html");
 
@@ -80,6 +105,10 @@ export function startDashboard(db: HistoryStore, config: HidsConfig) {
 
 			if (url.pathname === "/api/status") {
 				return Response.json(getScanStatus(db));
+			}
+
+			if (url.pathname === "/api/liveness") {
+				return Response.json(computeLiveness(getScanStatus(db)));
 			}
 
 			if (url.pathname === "/api/heartbeat-remote") {

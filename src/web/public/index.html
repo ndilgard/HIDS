@@ -42,6 +42,9 @@
   }
   .banner.clear { border-color: var(--ok); color: var(--ok); }
   .banner.alerts { border-color: var(--crit); color: var(--crit); }
+  .banner.liveness { font-size: 1.05rem; }
+  .banner.liveness.ok { border-color: var(--ok); color: var(--ok); }
+  .banner.liveness.down { border-color: var(--crit); color: var(--crit); background: rgba(203,36,49,0.08); }
   .banner.remote { display: flex; justify-content: space-between; align-items: center; font-weight: 400; }
   .banner.remote .label { font-weight: 600; }
   .banner.remote.up { border-color: var(--ok); }
@@ -76,6 +79,7 @@
 </head>
 <body>
   <h1>HIDS Dashboard</h1>
+  <div id="liveness-banner" class="banner liveness ok">Loading…</div>
   <div id="banner" class="banner clear">Loading…</div>
   <div id="remote-banner" class="banner remote unknown" style="display:none"></div>
   <div id="status" class="grid"></div>
@@ -83,12 +87,32 @@
   <div id="alerts"></div>
 
 <script>
+function formatDuration(ms) {
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m`;
+  return `${Math.round(m / 60)}h ${m % 60}m`;
+}
+
 async function refresh() {
-  const [status, alerts, remote] = await Promise.all([
+  const [status, alerts, remote, liveness] = await Promise.all([
     fetch('/api/status').then(r => r.json()),
     fetch('/api/alerts?limit=50').then(r => r.json()),
     fetch('/api/heartbeat-remote').then(r => r.json()),
+    fetch('/api/liveness').then(r => r.json()),
   ]);
+
+  const livenessBanner = document.getElementById('liveness-banner');
+  if (liveness.likelyDown) {
+    livenessBanner.className = 'banner liveness down';
+    livenessBanner.textContent = liveness.aliveAsOf
+      ? `⚠ HIDS daemon may be down — no scan activity in ${formatDuration(liveness.staleMs)} (this dashboard runs as a separate process and stays up regardless)`
+      : '⚠ HIDS daemon may be down — no scan data recorded yet (this dashboard runs as a separate process and stays up regardless)';
+  } else {
+    livenessBanner.className = 'banner liveness ok';
+    livenessBanner.textContent = `HIDS daemon running — last confirmed ${formatDuration(liveness.staleMs)} ago`;
+  }
 
   const remoteBanner = document.getElementById('remote-banner');
   if (!remote.configured) {

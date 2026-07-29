@@ -1,7 +1,7 @@
 # HIDS
 
 Custom lightweight Host Intrusion Detection System for a single personal Linux PC. Detection-only
-(read-only observers, no enforcement/blocking) across four modules:
+(read-only observers, no enforcement/blocking) across five modules:
 
 - **File integrity** — hashes a configurable watch list (`~/.ssh`, dotfiles, `/etc/passwd`,
   hal-skeleton's `credentials/` dir), real-time via `fs.watch` plus a periodic full re-walk
@@ -16,8 +16,13 @@ Custom lightweight Host Intrusion Detection System for a single personal Linux P
   process (kills WebRTC/QUIC noise without blinding detection to an unrecognized process).
   Outbound connections (`ss -tnp state established` + `ss -unp`): a process already flagged
   suspicious (deleted binary / running from `/tmp`, `/dev/shm`, `/var/tmp`) always alerts the
-  moment it talks to the network; any other binary's first-ever outbound connection alerts once,
-  then goes quiet for that binary.
+  moment it talks to the network; trust is tracked per (binary, destination subnet) — a
+  compromised-but-familiar binary reaching genuinely new infrastructure still alerts, while a CDN
+  handing out a different edge IP in an already-seen /24 (v4) or /48 (v6) doesn't re-alert.
+- **Heartbeat** — pings an external healthchecks.io dead-man's-switch every 2 minutes. This is the
+  one module that can detect HIDS itself going quiet (crashed, killed, or disabled by an attacker
+  with root) — nothing running only on this host can reliably report its own death, so the
+  alerting-on-absence logic lives entirely outside this machine.
 
 **Only real triggers ever touch disk** — routine scans that find nothing are never persisted, so
 there's no retention/rotation job to maintain. All runtime data (baselines + the alerts database)
@@ -33,16 +38,24 @@ bun src/cli.ts test-email    # confirm Gmail alerting works
 
 ## Running persistently (24/7 while the PC is on)
 
+Two independent services — deliberately separate processes, not one:
+
 ```bash
 mkdir -p ~/.config/systemd/user
-cp systemd/hids.service ~/.config/systemd/user/
+cp systemd/hids.service systemd/hids-dashboard.service ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable --now hids.service
-loginctl enable-linger nate   # makes it survive logout and start at boot — do this once
+systemctl --user enable --now hids.service hids-dashboard.service
+loginctl enable-linger nate   # makes both survive logout and start at boot — do this once
 ```
 
 `loginctl enable-linger` is a persistent setting (stored in `/var/lib/systemd/linger/nate`) — it
 does not need to be re-run. Verify anytime with `loginctl show-user nate --property=Linger`.
+
+`hids-dashboard.service` has no dependency on `hids.service` — if the detection daemon crashes,
+gets killed, or is disabled, the dashboard keeps running and keeps serving the last known state
+(with a "may be down" banner once that state goes stale), rather than becoming unreachable itself.
+Both read the same plain JSON/JSONL files in `dataDir`, which tolerate concurrent access fine
+(that's the whole reason this project doesn't use SQLite — see Known limits).
 
 ## CLI
 
@@ -57,8 +70,9 @@ does not need to be re-run. Verify anytime with `loginctl show-user nate --prope
 | `hids daemon` | Run the foreground daemon (what systemd execs) |
 | `hids start` / `stop` / `restart` | Thin wrappers around `systemctl --user` |
 
-Dashboard: `http://127.0.0.1:8787` while the daemon is running (localhost-only, no auth — a
-deliberate assumption for a single-user personal PC).
+Dashboard: `http://127.0.0.1:8787`, served by `hids-dashboard.service` (localhost-only, no auth — a
+deliberate assumption for a single-user personal PC). Runs independently of `hids.service` — see
+above.
 
 ## Config
 
