@@ -4,6 +4,7 @@ import { AlertRecorder, safeCreateMailer } from "./alert/policy.ts";
 import { loadConfig } from "./config.ts";
 import { createAuthModule } from "./modules/auth.ts";
 import { createFimModule } from "./modules/fim.ts";
+import { createHeartbeatModule } from "./modules/heartbeat.ts";
 import { createNetworkModule } from "./modules/network.ts";
 import { createProcessModule } from "./modules/process.ts";
 import type { Module } from "./modules/types.ts";
@@ -47,6 +48,7 @@ async function main() {
 		process: createProcessModule(ctx),
 		auth: createAuthModule(ctx),
 		network: createNetworkModule(ctx),
+		heartbeat: createHeartbeatModule(ctx),
 	};
 
 	for (const [name, mod] of Object.entries(modules)) {

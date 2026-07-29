@@ -21,6 +21,7 @@ export interface HidsConfig {
 		alertOnUdp: boolean;
 	};
 	alert: { debounceMs: number; emailOnNewBinary: boolean };
+	heartbeat: { enabled: boolean; url: string; intervalMs: number };
 }
 
 const CONFIG_PATH = join(import.meta.dir, "..", "config", "hids.config.json");
@@ -45,6 +46,7 @@ export function loadConfig(): HidsConfig {
 	raw.fim.watchPaths = raw.fim.watchPaths.map(expandHome);
 	raw.network.alertOnUdp ??= false; // default off — UDP "listeners" are mostly ephemeral app noise (WebRTC/QUIC/DNS)
 	raw.fim.watchTrustedProcessBinaries ??= true;
+	raw.heartbeat ??= { enabled: false, url: "", intervalMs: 120000 };
 
 	return raw;
 }
