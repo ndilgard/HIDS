@@ -31,9 +31,14 @@ No tests exist yet. Several real bugs this session (UDP `ss` column mis-indexing
 leak) were only caught by live production use, not by any pre-merge check. A test suite covering
 the parsing/detection logic would catch regressions before they reach the actual machine.
 
+## 5. Dashboard alert search/filtering — DONE
+
+Module/severity/text filters over Recent Alerts and Suppressed Events, re-rendered client-side
+from already-fetched data (`86ac173`). Bulk select + whitelist/unwhitelist actions and the
+Suppressed Events audit view (`2236d28`, `1abf59e`) came out of this same round of dashboard work.
+
 ## Other ideas raised in passing (not yet scoped)
 
 - Rootkit / hidden-process detection (kernel module loading, process list discrepancies)
 - Installed-package drift baseline (apt/dpkg) for supply-chain awareness
 - Alert severity routing (critical → push notification in addition to email, not just warning-level email)
-- Dashboard improvements: historical alert search/filtering, not just current status
