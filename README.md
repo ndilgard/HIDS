@@ -70,9 +70,14 @@ Both read the same plain JSON/JSONL files in `dataDir`, which tolerate concurren
 | `hids daemon` | Run the foreground daemon (what systemd execs) |
 | `hids start` / `stop` / `restart` | Thin wrappers around `systemctl --user` |
 
-Dashboard: `http://127.0.0.1:8787`, served by `hids-dashboard.service` (localhost-only, no auth — a
-deliberate assumption for a single-user personal PC). Runs independently of `hids.service` — see
-above.
+Dashboard: `http://<lan-ip>:8787`, served by `hids-dashboard.service` (LAN-reachable, no auth — a
+deliberate assumption for a single-user home network with no port-forward to the internet). Runs
+independently of `hids.service` — see above.
+
+Alert emails include a link to the dashboard and, for whitelistable findings (`network`/`fim`/
+`process`), a one-click "Whitelist" link — signed per-alert (`src/web/link-auth.ts`) so it can't
+be replayed against a different finding, and it opens a confirmation page rather than applying the
+rule on click (a prefetching mail scanner just renders the page, it can't submit the form).
 
 ## Config
 
@@ -86,5 +91,5 @@ per-module intervals/thresholds.
 - No `auditd` installed, so process monitoring is polling-based (10s interval) — a process that
   spawns and exits between polls is invisible. `sudo apt install auditd` + execve rules would
   close this gap, out of scope for v1.
-- Dashboard has no auth and binds to `127.0.0.1` only — revisit if remote/LAN access is ever
-  wanted.
+- Dashboard has no auth and binds to `0.0.0.0` (LAN-reachable) — fine for a trusted home network,
+  but don't port-forward it to the internet without adding real auth first.

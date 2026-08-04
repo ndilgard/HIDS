@@ -2,7 +2,7 @@
   "dataDir": "/mnt/omv/HIDS",
   "gmailEnvPath": "/home/nate/Claude_Code/Projects/HAL/hal-skeleton/credentials/gmail-smtp.env",
   "web": {
-    "host": "127.0.0.1",
+    "host": "0.0.0.0",
     "port": 8787
   },
   "fim": {

@@ -12,6 +12,17 @@ import type { HistoryStore } from "./history-db.ts";
  * writes over the SMB/CIFS mount reliably fail with SQLITE_BUSY — see the comment there).
  */
 
+/** Modules with a clean, structured field to match on. `auth` alerts are built from raw
+ * journalctl text with nothing structured to key off — see policy.ts for the fuller rationale. */
+export const WHITELISTABLE_MODULES = ["network", "fim", "process"];
+
+/** Sensible default field to whitelist on for a given module's findings — used both by the
+ * dashboard's inline form (its own copy, no build step to import from) and server-rendered
+ * whitelist-from-email confirmation pages. */
+export function defaultWhitelistField(module: string): string {
+	return module === "fim" ? "path" : "exePath";
+}
+
 export interface WhitelistRule {
 	id: string;
 	module: string;

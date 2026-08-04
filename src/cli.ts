@@ -26,7 +26,12 @@ const BASELINE_FILES: Record<string, string | null> = {
 function buildContext() {
 	const config = loadConfig();
 	const db = openHistoryDb(config.dataDir);
-	const recorder = new AlertRecorder(db, null, config.alert.debounceMs);
+	const recorder = new AlertRecorder(
+		db,
+		null,
+		config.alert.debounceMs,
+		config.web.port,
+	);
 	return { config, db, recorder };
 }
 

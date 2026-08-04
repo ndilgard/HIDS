@@ -1,3 +1,4 @@
+import { networkInterfaces } from "node:os";
 import {
 	type HistoryStore,
 	insertAlert,
@@ -7,8 +8,22 @@ import {
 import {
 	findMatchingRule,
 	recordWhitelistMatch,
+	WHITELISTABLE_MODULES,
 } from "../state/whitelist-store.ts";
+import { getOrCreateLinkSecret, signAlertToken } from "../web/link-auth.ts";
 import { type Mailer, MailerNotConfigured } from "./email.ts";
+
+/** First non-internal private IPv4 found — used to build links in alert emails that work from
+ * other devices on the home network (phone on home wifi), not just this host. Read fresh per
+ * email rather than cached/config'd, since DHCP could reassign it. */
+function lanIp(): string | null {
+	for (const iface of Object.values(networkInterfaces())) {
+		for (const addr of iface ?? []) {
+			if (addr.family === "IPv4" && !addr.internal) return addr.address;
+		}
+	}
+	return null;
+}
 
 export interface Finding {
 	module: string;
@@ -33,6 +48,7 @@ export class AlertRecorder {
 		private db: HistoryStore,
 		private mailer: Mailer | null,
 		private debounceMs: number,
+		private port: number,
 	) {}
 
 	record(finding: Finding): void {
@@ -89,12 +105,21 @@ export class AlertRecorder {
 			batch.length === 1
 				? `HIDS alert: ${batch[0]!.finding.module} — ${batch[0]!.finding.summary}`
 				: `HIDS alert: ${batch.length} findings`;
-		const body = batch
-			.map(
-				({ finding }) =>
-					`[${finding.module}] ${finding.severity.toUpperCase()}: ${finding.summary}\n${JSON.stringify(finding.detail, null, 2)}`,
-			)
-			.join("\n\n---\n\n");
+
+		const ip = lanIp();
+		const linkHeader = ip ? `Dashboard: http://${ip}:${this.port}/\n\n` : "";
+		const secret = ip ? getOrCreateLinkSecret(this.db.dataDir) : null;
+		const body =
+			linkHeader +
+			batch
+				.map(({ id, finding }) => {
+					const whitelistLine =
+						secret && WHITELISTABLE_MODULES.includes(finding.module)
+							? `\nWhitelist: http://${ip}:${this.port}/api/whitelist-confirm?id=${id}&token=${signAlertToken(secret, id)}`
+							: "";
+					return `[${finding.module}] ${finding.severity.toUpperCase()}: ${finding.summary}\n${JSON.stringify(finding.detail, null, 2)}${whitelistLine}`;
+				})
+				.join("\n\n---\n\n");
 
 		try {
 			await this.mailer.send(subject, body);

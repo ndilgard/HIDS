@@ -39,7 +39,12 @@ async function main() {
 
 	const db = openHistoryDb(config.dataDir);
 	const mailer = safeCreateMailer(createMailer, config.gmailEnvPath);
-	const recorder = new AlertRecorder(db, mailer, config.alert.debounceMs);
+	const recorder = new AlertRecorder(
+		db,
+		mailer,
+		config.alert.debounceMs,
+		config.web.port,
+	);
 
 	const ctx = { config, db, recorder };
 	const modules: Record<string, Module> = {

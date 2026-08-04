@@ -146,6 +146,13 @@ export function getAlerts(
 	return alerts.slice(0, opts.limit ?? 200);
 }
 
+export function getAlertById(
+	store: HistoryStore,
+	id: string,
+): Alert | undefined {
+	return readAllAlerts(store).find((a) => a.id === id);
+}
+
 /** Fixed-size, one row per module — overwritten every scan, never grows. */
 export function upsertScanStatus(
 	store: HistoryStore,

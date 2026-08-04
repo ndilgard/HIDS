@@ -2,6 +2,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { HidsConfig } from "../config.ts";
 import {
+	type Alert,
+	getAlertById,
 	getAlerts,
 	getScanStatus,
 	type HistoryStore,
@@ -9,9 +11,69 @@ import {
 } from "../state/history-db.ts";
 import {
 	addWhitelistRule,
+	defaultWhitelistField,
 	getWhitelistRules,
 	removeWhitelistRule,
 } from "../state/whitelist-store.ts";
+import { getOrCreateLinkSecret, verifyAlertToken } from "./link-auth.ts";
+
+function escapeHtml(s: unknown): string {
+	return String(s).replace(
+		/[&<>"']/g,
+		(c) =>
+			({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[
+				c
+			]!,
+	);
+}
+
+function whitelistConfirmPage(alert: Alert, id: string, token: string): string {
+	const field = defaultWhitelistField(alert.module);
+	const detail = alert.detail as Record<string, unknown> | null;
+	const value = detail && detail[field] != null ? String(detail[field]) : "";
+	return `<!doctype html>
+<html><head><meta charset="utf-8"><title>Whitelist — HIDS</title>
+<style>body{font-family:system-ui,sans-serif;max-width:560px;margin:40px auto;padding:0 16px;color:#222}
+label{display:block;margin-top:12px;font-size:0.9em;color:#555}
+input{width:100%;padding:6px;font-size:1em;box-sizing:border-box}
+button{margin-top:16px;padding:8px 16px;font-size:1em}
+.detail{background:#f4f4f4;padding:12px;border-radius:4px;font-size:0.85em;overflow-x:auto}</style>
+</head><body>
+<h2>Whitelist this finding?</h2>
+<p><strong>${escapeHtml(alert.module)}</strong> — ${escapeHtml(alert.severity)}<br>${escapeHtml(alert.summary)}</p>
+<pre class="detail">${escapeHtml(JSON.stringify(alert.detail, null, 2))}</pre>
+<form method="POST" action="/api/whitelist-confirm">
+<input type="hidden" name="id" value="${escapeHtml(id)}">
+<input type="hidden" name="token" value="${escapeHtml(token)}">
+<label>Field<input type="text" name="field" value="${escapeHtml(field)}"></label>
+<label>Value<input type="text" name="value" value="${escapeHtml(value)}"></label>
+<label>Note (optional)<input type="text" name="note"></label>
+<button type="submit">Add to Whitelist</button>
+</form>
+</body></html>`;
+}
+
+function whitelistSuccessPage(rule: {
+	module: string;
+	field: string;
+	value: string;
+}): string {
+	return `<!doctype html>
+<html><head><meta charset="utf-8"><title>Whitelisted — HIDS</title>
+<style>body{font-family:system-ui,sans-serif;max-width:560px;margin:40px auto;padding:0 16px;color:#222}</style>
+</head><body>
+<h2>Rule added</h2>
+<p>${escapeHtml(rule.module)} — ${escapeHtml(rule.field)} = ${escapeHtml(rule.value)}</p>
+<p><a href="/">Back to dashboard</a></p>
+</body></html>`;
+}
+
+function errorPage(status: number, message: string): Response {
+	return new Response(
+		`<!doctype html><html><head><meta charset="utf-8"><title>Error — HIDS</title></head><body><h2>${escapeHtml(message)}</h2></body></html>`,
+		{ status, headers: { "content-type": "text/html" } },
+	);
+}
 
 /** Modules with a genuinely fixed, short poll interval — the only reliable signal that the
  * detection daemon (not just this dashboard process) is actually still alive and scanning. FIM's
@@ -172,13 +234,58 @@ export function startDashboard(db: HistoryStore, config: HidsConfig) {
 				return new Response(null, { status: 204 });
 			}
 
+			if (url.pathname === "/api/whitelist-confirm" && req.method === "GET") {
+				const id = url.searchParams.get("id");
+				const token = url.searchParams.get("token");
+				if (!id || !token) return errorPage(400, "Missing id or token.");
+				const secret = getOrCreateLinkSecret(db.dataDir);
+				if (!verifyAlertToken(secret, id, token)) {
+					return errorPage(403, "Invalid or expired link.");
+				}
+				const alert = getAlertById(db, id);
+				if (!alert) return errorPage(404, "Alert not found.");
+				return new Response(whitelistConfirmPage(alert, id, token), {
+					headers: { "content-type": "text/html" },
+				});
+			}
+
+			if (url.pathname === "/api/whitelist-confirm" && req.method === "POST") {
+				const form = await req.formData();
+				const id = form.get("id")?.toString();
+				const token = form.get("token")?.toString();
+				const field = form.get("field")?.toString();
+				const value = form.get("value")?.toString();
+				const note = form.get("note")?.toString() || undefined;
+				if (!id || !token || !field || !value) {
+					return errorPage(400, "Missing required fields.");
+				}
+				const secret = getOrCreateLinkSecret(db.dataDir);
+				if (!verifyAlertToken(secret, id, token)) {
+					return errorPage(403, "Invalid or expired link.");
+				}
+				const alert = getAlertById(db, id);
+				if (!alert) return errorPage(404, "Alert not found.");
+				const rule = addWhitelistRule(db, {
+					module: alert.module,
+					field,
+					value,
+					note,
+				});
+				return new Response(whitelistSuccessPage(rule), {
+					headers: { "content-type": "text/html" },
+				});
+			}
+
 			return new Response("Not found", { status: 404 });
 		},
 	});
 
-	// Explicit security assumption: localhost-only, no auth — single-user personal PC.
+	// Explicit security assumption: LAN-reachable, no auth — single-user home network, no
+	// port-forward to the wider internet. Whitelist-from-email links carry their own signed
+	// per-alert token (see link-auth.ts) since those perform a mutation; the dashboard itself
+	// still has none, same trust model as when it was localhost-only, just wider now.
 	console.log(
-		`[web] dashboard listening on http://${config.web.host}:${config.web.port} (localhost-only)`,
+		`[web] dashboard listening on http://${config.web.host}:${config.web.port}`,
 	);
 	return server;
 }
