@@ -166,7 +166,12 @@ export function startDashboard(db: HistoryStore, config: HidsConfig) {
 
 			if (url.pathname === "/" || url.pathname === "/index.html") {
 				return new Response(readFileSync(INDEX_HTML_PATH, "utf-8"), {
-					headers: { "content-type": "text/html" },
+					// no-store: this page is actively iterated on and has no version/asset hash to
+					// bust a stale cache with — always serve the current file, not a cached one.
+					headers: {
+						"content-type": "text/html",
+						"cache-control": "no-store",
+					},
 				});
 			}
 
