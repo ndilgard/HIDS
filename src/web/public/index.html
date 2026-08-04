@@ -98,6 +98,9 @@
   .wl-form .wl-value { flex: 1; min-width: 140px; }
   .wl-form .wl-note { width: 140px; }
   h2 { margin-top: 2rem; }
+  .bulk-actions { margin: 0.5rem 0; }
+  .bulk-actions button:disabled { opacity: 0.5; cursor: default; }
+  input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; }
 </style>
 </head>
 <body>
@@ -107,9 +110,17 @@
   <div id="remote-banner" class="banner remote unknown" style="display:none"></div>
   <div id="status" class="grid"></div>
   <h2>Recent Alerts</h2>
+  <div class="bulk-actions">
+    <button id="bulk-whitelist-btn" onclick="bulkWhitelist()" disabled>Whitelist Selected (0)</button>
+  </div>
   <div id="alerts"></div>
   <h2>Whitelist</h2>
   <div id="whitelist"></div>
+  <h2>Suppressed Events</h2>
+  <div class="bulk-actions">
+    <button id="bulk-unwhitelist-btn" onclick="bulkUnwhitelist()" disabled>Unwhitelist Selected (0)</button>
+  </div>
+  <div id="suppressed"></div>
 
 <script>
 function formatDuration(ms) {
@@ -122,6 +133,63 @@ function formatDuration(ms) {
 
 const WHITELISTABLE_MODULES = ['network', 'fim', 'process'];
 let alertsById = new Map();
+let suppressedById = new Map();
+let selectedAlertIds = new Set();
+let selectedSuppressedIds = new Set();
+
+function toggleAlertSelect(id, checked) {
+  if (checked) selectedAlertIds.add(id); else selectedAlertIds.delete(id);
+  updateBulkButtons();
+}
+
+function toggleSuppressedSelect(id, checked) {
+  if (checked) selectedSuppressedIds.add(id); else selectedSuppressedIds.delete(id);
+  updateBulkButtons();
+}
+
+function updateBulkButtons() {
+  const wlBtn = document.getElementById('bulk-whitelist-btn');
+  wlBtn.disabled = selectedAlertIds.size === 0;
+  wlBtn.textContent = `Whitelist Selected (${selectedAlertIds.size})`;
+
+  const unwlBtn = document.getElementById('bulk-unwhitelist-btn');
+  unwlBtn.disabled = selectedSuppressedIds.size === 0;
+  unwlBtn.textContent = `Unwhitelist Selected (${selectedSuppressedIds.size})`;
+}
+
+async function bulkWhitelist() {
+  const seen = new Set();
+  const rules = [];
+  for (const id of selectedAlertIds) {
+    const a = alertsById.get(id);
+    if (!a || !WHITELISTABLE_MODULES.includes(a.module)) continue;
+    const field = defaultWhitelistField(a.module);
+    const value = a.detail && a.detail[field] != null ? String(a.detail[field]) : null;
+    if (!value) continue;
+    const key = `${a.module}|${field}|${value}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    rules.push({ module: a.module, field, value });
+  }
+  await Promise.all(rules.map(r => fetch('/api/whitelist', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(r),
+  })));
+  selectedAlertIds.clear();
+  refresh();
+}
+
+async function bulkUnwhitelist() {
+  const ruleIds = new Set();
+  for (const id of selectedSuppressedIds) {
+    const a = suppressedById.get(id);
+    if (a && a.whitelistRuleId) ruleIds.add(a.whitelistRuleId);
+  }
+  await Promise.all([...ruleIds].map(rid => fetch(`/api/whitelist/${rid}`, { method: 'DELETE' })));
+  selectedSuppressedIds.clear();
+  refresh();
+}
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({
@@ -171,14 +239,23 @@ async function removeRule(id) {
 }
 
 async function refresh() {
-  const [status, alerts, remote, liveness, whitelist] = await Promise.all([
+  const [status, alerts, remote, liveness, whitelist, suppressed] = await Promise.all([
     fetch('/api/status').then(r => r.json()),
     fetch('/api/alerts?limit=50').then(r => r.json()),
     fetch('/api/heartbeat-remote').then(r => r.json()),
     fetch('/api/liveness').then(r => r.json()),
     fetch('/api/whitelist').then(r => r.json()),
+    fetch('/api/alerts?suppressed=true&limit=100').then(r => r.json()),
   ]);
   alertsById = new Map(alerts.map(a => [a.id, a]));
+  suppressedById = new Map(suppressed.map(a => [a.id, a]));
+  const whitelistById = new Map(whitelist.map(r => [r.id, r]));
+
+  // Drop selections for rows that dropped out of the current page (whitelisted, aged out of the
+  // limit, or the rule behind a suppressed row got removed by some other action) — otherwise the
+  // bulk-action count would silently include rows no longer on screen.
+  for (const id of selectedAlertIds) if (!alertsById.has(id)) selectedAlertIds.delete(id);
+  for (const id of selectedSuppressedIds) if (!suppressedById.has(id)) selectedSuppressedIds.delete(id);
 
   const livenessBanner = document.getElementById('liveness-banner');
   if (liveness.likelyDown) {
@@ -232,10 +309,15 @@ async function refresh() {
   } else {
     alertsDiv.innerHTML = `
       <table>
-        <thead><tr><th>Time</th><th>Module</th><th>Severity</th><th>Summary</th><th></th></tr></thead>
+        <thead><tr><th></th><th>Time</th><th>Module</th><th>Severity</th><th>Summary</th><th></th></tr></thead>
         <tbody>
           ${alerts.map(a => `
             <tr>
+              <td>${
+                WHITELISTABLE_MODULES.includes(a.module)
+                  ? `<input type="checkbox" ${selectedAlertIds.has(a.id) ? 'checked' : ''} onchange="toggleAlertSelect('${a.id}', this.checked)" />`
+                  : ''
+              }</td>
               <td>${new Date(a.ts).toLocaleString()}</td>
               <td>${a.module}</td>
               <td class="sev-${a.severity}">${a.severity}</td>
@@ -275,6 +357,44 @@ async function refresh() {
       </table>
     `;
   }
+
+  const suppressedDiv = document.getElementById('suppressed');
+  if (suppressed.length === 0) {
+    suppressedDiv.innerHTML = '<div class="empty">No suppressed events.</div>';
+  } else {
+    suppressedDiv.innerHTML = `
+      <table>
+        <thead><tr><th></th><th>Time</th><th>Module</th><th>Severity</th><th>Summary</th><th>Matched rule</th><th></th></tr></thead>
+        <tbody>
+          ${suppressed.map(a => {
+            const rule = whitelistById.get(a.whitelistRuleId);
+            const ruleLabel = rule ? `${escapeHtml(rule.field)} = ${escapeHtml(rule.value)}` : '(rule removed)';
+            return `
+              <tr>
+                <td>${
+                  rule
+                    ? `<input type="checkbox" ${selectedSuppressedIds.has(a.id) ? 'checked' : ''} onchange="toggleSuppressedSelect('${a.id}', this.checked)" />`
+                    : ''
+                }</td>
+                <td>${new Date(a.ts).toLocaleString()}</td>
+                <td>${a.module}</td>
+                <td class="sev-${a.severity}">${a.severity}</td>
+                <td>${a.summary}</td>
+                <td>${ruleLabel}</td>
+                <td>${
+                  rule
+                    ? `<button onclick="removeRule('${rule.id}')">Unwhitelist</button>`
+                    : ''
+                }</td>
+              </tr>
+            `;
+          }).join('')}
+        </tbody>
+      </table>
+    `;
+  }
+
+  updateBulkButtons();
 }
 
 refresh();

@@ -28,6 +28,14 @@ export interface Alert {
 	summary: string;
 	detail: unknown;
 	emailed: boolean;
+	/** True for findings that matched a whitelist rule — recorded for the "Suppressed Events"
+	 * review view (so a bad whitelist rule can be caught after the fact) but excluded from the
+	 * normal alert list/email flow. Absent (not just false) on every alert recorded before this
+	 * field existed — treated the same as false everywhere it's read. */
+	suppressed?: boolean;
+	/** The whitelist rule that suppressed this alert, if any — lets the dashboard offer a direct
+	 * "remove this rule" action next to the evidence. */
+	whitelistRuleId?: string | null;
 }
 
 export interface ScanStatus {
@@ -83,6 +91,8 @@ export function insertAlert(
 		severity: Severity;
 		summary: string;
 		detail: unknown;
+		suppressed?: boolean;
+		whitelistRuleId?: string | null;
 	},
 ): string {
 	const id = nextId();
@@ -94,6 +104,8 @@ export function insertAlert(
 		summary: args.summary,
 		detail: args.detail,
 		emailed: false,
+		suppressed: args.suppressed ?? false,
+		whitelistRuleId: args.whitelistRuleId ?? null,
 	};
 	appendFileSync(alertsPath(store), `${JSON.stringify(alert)}\n`);
 	return id;
@@ -115,11 +127,21 @@ export function markEmailed(store: HistoryStore, id: string): void {
 
 export function getAlerts(
 	store: HistoryStore,
-	opts: { since?: string; module?: string; limit?: number } = {},
+	opts: {
+		since?: string;
+		module?: string;
+		limit?: number;
+		/** Defaults to false (existing behavior) — alerts recorded before this field existed have
+		 * no `suppressed` key at all, which reads the same as false here. Pass true to fetch the
+		 * "Suppressed Events" review list instead. */
+		suppressed?: boolean;
+	} = {},
 ): Alert[] {
 	let alerts = readAllAlerts(store);
 	if (opts.since) alerts = alerts.filter((a) => a.ts >= opts.since!);
 	if (opts.module) alerts = alerts.filter((a) => a.module === opts.module);
+	const wantSuppressed = opts.suppressed ?? false;
+	alerts = alerts.filter((a) => Boolean(a.suppressed) === wantSuppressed);
 	alerts.sort((a, b) => (a.ts < b.ts ? 1 : -1));
 	return alerts.slice(0, opts.limit ?? 200);
 }

@@ -42,6 +42,17 @@ export class AlertRecorder {
 			finding.detail,
 		);
 		if (whitelisted) {
+			// Still recorded (as `suppressed`) rather than dropped entirely — a bad whitelist rule
+			// should be catchable after the fact from the dashboard's "Suppressed Events" view, not
+			// silently invisible. Just skipped from the normal alert list/email flow below.
+			insertAlert(this.db, {
+				module: finding.module,
+				severity: finding.severity,
+				summary: finding.summary,
+				detail: finding.detail,
+				suppressed: true,
+				whitelistRuleId: whitelisted.id,
+			});
 			recordWhitelistMatch(this.db, whitelisted.id);
 			return;
 		}

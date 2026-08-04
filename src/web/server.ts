@@ -126,11 +126,13 @@ export function startDashboard(db: HistoryStore, config: HidsConfig) {
 				const since = url.searchParams.get("since") ?? undefined;
 				const module = url.searchParams.get("module") ?? undefined;
 				const limit = url.searchParams.get("limit");
+				const suppressed = url.searchParams.get("suppressed");
 				return Response.json(
 					getAlerts(db, {
 						since,
 						module,
 						limit: limit ? Number(limit) : undefined,
+						suppressed: suppressed === null ? undefined : suppressed === "true",
 					}),
 				);
 			}
