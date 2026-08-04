@@ -79,6 +79,14 @@ Alert emails include a link to the dashboard and, for whitelistable findings (`n
 be replayed against a different finding, and it opens a confirmation page rather than applying the
 rule on click (a prefetching mail scanner just renders the page, it can't submit the form).
 
+The dashboard itself has module/severity/text filters over Recent Alerts (re-rendered client-side
+from already-fetched data, so typing in the search box doesn't hit the server per keystroke), plus
+checkboxes for bulk "Whitelist Selected" — deduping repeated (module, field, value) matches into
+one rule rather than several. Whitelisted findings aren't dropped: they're still recorded
+(`suppressed`/`whitelistRuleId` on the `Alert`) and shown in a separate **Suppressed Events**
+section, each with its own "Unwhitelist" action (or bulk "Unwhitelist Selected"), so a rule that
+turns out too broad can be reviewed and undone instead of silently hiding history.
+
 ## Config
 
 `config/hids.config.json` (copy from `config/hids.config.json.example`). Key fields: `dataDir`
