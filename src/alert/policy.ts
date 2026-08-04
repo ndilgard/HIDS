@@ -4,6 +4,10 @@ import {
 	markEmailed,
 	type Severity,
 } from "../state/history-db.ts";
+import {
+	findMatchingRule,
+	recordWhitelistMatch,
+} from "../state/whitelist-store.ts";
 import { type Mailer, MailerNotConfigured } from "./email.ts";
 
 export interface Finding {
@@ -32,6 +36,16 @@ export class AlertRecorder {
 	) {}
 
 	record(finding: Finding): void {
+		const whitelisted = findMatchingRule(
+			this.db,
+			finding.module,
+			finding.detail,
+		);
+		if (whitelisted) {
+			recordWhitelistMatch(this.db, whitelisted.id);
+			return;
+		}
+
 		const id = insertAlert(this.db, {
 			module: finding.module,
 			severity: finding.severity,

@@ -7,6 +7,11 @@ import {
 	type HistoryStore,
 	type ScanStatus,
 } from "../state/history-db.ts";
+import {
+	addWhitelistRule,
+	getWhitelistRules,
+	removeWhitelistRule,
+} from "../state/whitelist-store.ts";
 
 /** Modules with a genuinely fixed, short poll interval — the only reliable signal that the
  * detection daemon (not just this dashboard process) is actually still alive and scanning. FIM's
@@ -94,7 +99,7 @@ export function startDashboard(db: HistoryStore, config: HidsConfig) {
 	const server = Bun.serve({
 		hostname: config.web.host,
 		port: config.web.port,
-		fetch(req) {
+		async fetch(req) {
 			const url = new URL(req.url);
 
 			if (url.pathname === "/" || url.pathname === "/index.html") {
@@ -128,6 +133,41 @@ export function startDashboard(db: HistoryStore, config: HidsConfig) {
 						limit: limit ? Number(limit) : undefined,
 					}),
 				);
+			}
+
+			if (url.pathname === "/api/whitelist" && req.method === "GET") {
+				return Response.json(getWhitelistRules(db));
+			}
+
+			if (url.pathname === "/api/whitelist" && req.method === "POST") {
+				const body = (await req.json()) as {
+					module?: string;
+					field?: string;
+					value?: string;
+					note?: string;
+				};
+				if (!body.module || !body.field || !body.value) {
+					return Response.json(
+						{ error: "module, field, and value are required" },
+						{ status: 400 },
+					);
+				}
+				const rule = addWhitelistRule(db, {
+					module: body.module,
+					field: body.field,
+					value: body.value,
+					note: body.note,
+				});
+				return Response.json(rule, { status: 201 });
+			}
+
+			if (
+				url.pathname.startsWith("/api/whitelist/") &&
+				req.method === "DELETE"
+			) {
+				const id = url.pathname.slice("/api/whitelist/".length);
+				removeWhitelistRule(db, id);
+				return new Response(null, { status: 204 });
 			}
 
 			return new Response("Not found", { status: 404 });

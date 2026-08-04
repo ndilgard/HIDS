@@ -75,6 +75,29 @@
   .sev-warning { color: var(--warn); font-weight: 600; }
   .sev-info { color: var(--muted); }
   .empty { color: var(--muted); padding: 1rem 0; }
+  button {
+    background: var(--card);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.3rem 0.6rem;
+    font-size: 0.8rem;
+    cursor: pointer;
+  }
+  button:hover { border-color: var(--muted); }
+  .wl-form { display: flex; gap: 0.4rem; align-items: center; flex-wrap: wrap; }
+  .wl-form input {
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.25rem 0.5rem;
+    font-size: 0.8rem;
+  }
+  .wl-form .wl-field { width: 90px; }
+  .wl-form .wl-value { flex: 1; min-width: 140px; }
+  .wl-form .wl-note { width: 140px; }
+  h2 { margin-top: 2rem; }
 </style>
 </head>
 <body>
@@ -85,6 +108,8 @@
   <div id="status" class="grid"></div>
   <h2>Recent Alerts</h2>
   <div id="alerts"></div>
+  <h2>Whitelist</h2>
+  <div id="whitelist"></div>
 
 <script>
 function formatDuration(ms) {
@@ -95,13 +120,65 @@ function formatDuration(ms) {
   return `${Math.round(m / 60)}h ${m % 60}m`;
 }
 
+const WHITELISTABLE_MODULES = ['network', 'fim', 'process'];
+let alertsById = new Map();
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
+
+function defaultWhitelistField(module) {
+  return module === 'fim' ? 'path' : 'exePath';
+}
+
+function showWhitelistForm(alertId) {
+  const a = alertsById.get(alertId);
+  if (!a) return;
+  const field = defaultWhitelistField(a.module);
+  const value = a.detail && a.detail[field] != null ? String(a.detail[field]) : '';
+  const cell = document.getElementById(`wl-row-${alertId}`);
+  cell.innerHTML = `
+    <div class="wl-form">
+      <input class="wl-field" type="text" value="${escapeHtml(field)}" />
+      <input class="wl-value" type="text" value="${escapeHtml(value)}" />
+      <input class="wl-note" type="text" placeholder="note (optional)" />
+      <button onclick="submitWhitelist('${alertId}')">Add</button>
+      <button onclick="refresh()">Cancel</button>
+    </div>
+  `;
+}
+
+async function submitWhitelist(alertId) {
+  const a = alertsById.get(alertId);
+  const cell = document.getElementById(`wl-row-${alertId}`);
+  const field = cell.querySelector('.wl-field').value.trim();
+  const value = cell.querySelector('.wl-value').value.trim();
+  const note = cell.querySelector('.wl-note').value.trim();
+  if (!a || !field || !value) return;
+  await fetch('/api/whitelist', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ module: a.module, field, value, note: note || undefined }),
+  });
+  refresh();
+}
+
+async function removeRule(id) {
+  await fetch(`/api/whitelist/${id}`, { method: 'DELETE' });
+  refresh();
+}
+
 async function refresh() {
-  const [status, alerts, remote, liveness] = await Promise.all([
+  const [status, alerts, remote, liveness, whitelist] = await Promise.all([
     fetch('/api/status').then(r => r.json()),
     fetch('/api/alerts?limit=50').then(r => r.json()),
     fetch('/api/heartbeat-remote').then(r => r.json()),
     fetch('/api/liveness').then(r => r.json()),
+    fetch('/api/whitelist').then(r => r.json()),
   ]);
+  alertsById = new Map(alerts.map(a => [a.id, a]));
 
   const livenessBanner = document.getElementById('liveness-banner');
   if (liveness.likelyDown) {
@@ -155,7 +232,7 @@ async function refresh() {
   } else {
     alertsDiv.innerHTML = `
       <table>
-        <thead><tr><th>Time</th><th>Module</th><th>Severity</th><th>Summary</th></tr></thead>
+        <thead><tr><th>Time</th><th>Module</th><th>Severity</th><th>Summary</th><th></th></tr></thead>
         <tbody>
           ${alerts.map(a => `
             <tr>
@@ -163,6 +240,35 @@ async function refresh() {
               <td>${a.module}</td>
               <td class="sev-${a.severity}">${a.severity}</td>
               <td>${a.summary}</td>
+              <td id="wl-row-${a.id}">${
+                WHITELISTABLE_MODULES.includes(a.module)
+                  ? `<button onclick="showWhitelistForm('${a.id}')">Whitelist</button>`
+                  : ''
+              }</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    `;
+  }
+
+  const whitelistDiv = document.getElementById('whitelist');
+  if (whitelist.length === 0) {
+    whitelistDiv.innerHTML = '<div class="empty">No whitelist rules.</div>';
+  } else {
+    whitelistDiv.innerHTML = `
+      <table>
+        <thead><tr><th>Module</th><th>Field</th><th>Value</th><th>Note</th><th>Matches</th><th>Last matched</th><th></th></tr></thead>
+        <tbody>
+          ${whitelist.map(r => `
+            <tr>
+              <td>${r.module}</td>
+              <td>${escapeHtml(r.field)}</td>
+              <td>${escapeHtml(r.value)}</td>
+              <td>${r.note ? escapeHtml(r.note) : ''}</td>
+              <td>${r.matchCount}</td>
+              <td>${r.lastMatchedAt ? new Date(r.lastMatchedAt).toLocaleString() : 'never'}</td>
+              <td><button onclick="removeRule('${r.id}')">Remove</button></td>
             </tr>
           `).join('')}
         </tbody>

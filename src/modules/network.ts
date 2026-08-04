@@ -185,7 +185,7 @@ export function createNetworkModule(ctx: ModuleContext): Module {
 					module: "network",
 					severity: "critical",
 					summary: `Suspicious process (${suspicious.reason}) made an outbound connection: ${exePath} -> ${conn.peerAddress} (${conn.proto})`,
-					detail: conn,
+					detail: { ...conn, exePath },
 				});
 				continue;
 			}
@@ -208,7 +208,7 @@ export function createNetworkModule(ctx: ModuleContext): Module {
 						module: "network",
 						severity: "warning",
 						summary,
-						detail: conn,
+						detail: { ...conn, exePath },
 					});
 				}
 			}
@@ -237,6 +237,13 @@ export function createNetworkModule(ctx: ModuleContext): Module {
 				known.add(key);
 				newListeners++;
 
+				// Resolved once per new listener (not just inside the UDP-ephemeral branch below) so
+				// it can also be attached to the alert's `detail` — that's what lets the dashboard's
+				// whitelist feature match "this process" rather than a raw, pid-bearing `ss` string.
+				const listenerPid = extractPid(listener.process);
+				const listenerExePath =
+					listenerPid !== null ? resolveExePath(listenerPid) : null;
+
 				// UDP "listeners" from `ss` include ephemeral bind()-only sockets ordinary apps open
 				// constantly (WebRTC/QUIC/DNS on high ports) — those look identical to a genuine new
 				// listener by port number alone. Rather than ignore all UDP (which would blind us to
@@ -255,18 +262,14 @@ export function createNetworkModule(ctx: ModuleContext): Module {
 						port !== null &&
 						port >= EPHEMERAL_PORT_MIN &&
 						port <= EPHEMERAL_PORT_MAX;
-					if (isEphemeralPort) {
-						const pid = extractPid(listener.process);
-						const exePath = pid !== null ? resolveExePath(pid) : null;
-						if (exePath) {
-							const priorCount = ephemeralUdpCounts[exePath] ?? 0;
-							ephemeralUdpCounts[exePath] = priorCount + 1;
-							suppressAsEphemeralNoise =
-								priorCount >= EPHEMERAL_UDP_TRUST_THRESHOLD;
-						}
-						// exePath unresolved (process already exited, or permissions) — can't establish
-						// a trust history, so it stays alert-worthy rather than silently passing through.
+					if (isEphemeralPort && listenerExePath) {
+						const priorCount = ephemeralUdpCounts[listenerExePath] ?? 0;
+						ephemeralUdpCounts[listenerExePath] = priorCount + 1;
+						suppressAsEphemeralNoise =
+							priorCount >= EPHEMERAL_UDP_TRUST_THRESHOLD;
 					}
+					// exePath unresolved (process already exited, or permissions) — can't establish
+					// a trust history, so it stays alert-worthy rather than silently passing through.
 				}
 
 				if (
@@ -278,7 +281,7 @@ export function createNetworkModule(ctx: ModuleContext): Module {
 						module: "network",
 						severity: "warning",
 						summary: `New listening port: ${listener.proto} ${listener.localAddress} (${listener.process || "unknown process"})`,
-						detail: listener,
+						detail: { ...listener, exePath: listenerExePath },
 					});
 				}
 			}
