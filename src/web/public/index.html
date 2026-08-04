@@ -101,6 +101,18 @@
   .bulk-actions { margin: 0.5rem 0; }
   .bulk-actions button:disabled { opacity: 0.5; cursor: default; }
   input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; }
+  .filter-bar { display: flex; gap: 1.25rem; align-items: flex-end; flex-wrap: wrap; margin-top: 1rem; }
+  .filter-bar label {
+    display: flex; flex-direction: column; gap: 0.25rem;
+    font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .filter-bar select, .filter-bar input {
+    background: var(--card); color: var(--text); border: 1px solid var(--border);
+    border-radius: 4px; padding: 0.35rem 0.5rem; font-size: 0.9rem;
+    text-transform: none; letter-spacing: normal;
+  }
+  .filter-bar input { min-width: 220px; }
+  .filter-hint { font-size: 0.75rem; color: var(--muted); align-self: center; }
 </style>
 </head>
 <body>
@@ -109,6 +121,29 @@
   <div id="banner" class="banner clear">Loading…</div>
   <div id="remote-banner" class="banner remote unknown" style="display:none"></div>
   <div id="status" class="grid"></div>
+  <div class="filter-bar">
+    <label>Module
+      <select id="filter-module" onchange="applyFilters()">
+        <option value="">All</option>
+        <option value="network">network</option>
+        <option value="fim">fim</option>
+        <option value="process">process</option>
+        <option value="auth">auth</option>
+      </select>
+    </label>
+    <label>Severity
+      <select id="filter-severity" onchange="applyFilters()">
+        <option value="">All</option>
+        <option value="critical">critical</option>
+        <option value="warning">warning</option>
+        <option value="info">info</option>
+      </select>
+    </label>
+    <label>Search
+      <input id="filter-search" type="text" placeholder="summary or detail…" oninput="applyFilters()" />
+    </label>
+    <span class="filter-hint">Applies to Recent Alerts &amp; Suppressed Events below</span>
+  </div>
   <h2>Recent Alerts</h2>
   <div class="bulk-actions">
     <button id="bulk-whitelist-btn" onclick="bulkWhitelist()" disabled>Whitelist Selected (0)</button>
@@ -136,6 +171,30 @@ let alertsById = new Map();
 let suppressedById = new Map();
 let selectedAlertIds = new Set();
 let selectedSuppressedIds = new Set();
+
+// Full, unfiltered data from the last poll — filtering re-renders from these instead of
+// re-fetching, so typing in the search box doesn't hit the network on every keystroke.
+let lastAlerts = [];
+let lastSuppressed = [];
+let lastWhitelistById = new Map();
+
+function passesFilters(a) {
+  const module = document.getElementById('filter-module').value;
+  const severity = document.getElementById('filter-severity').value;
+  const search = document.getElementById('filter-search').value.trim().toLowerCase();
+  if (module && a.module !== module) return false;
+  if (severity && a.severity !== severity) return false;
+  if (search) {
+    const haystack = `${a.summary} ${JSON.stringify(a.detail)}`.toLowerCase();
+    if (!haystack.includes(search)) return false;
+  }
+  return true;
+}
+
+function applyFilters() {
+  renderAlertsTable();
+  renderSuppressedTable();
+}
 
 function toggleAlertSelect(id, checked) {
   if (checked) selectedAlertIds.add(id); else selectedAlertIds.delete(id);
@@ -250,6 +309,9 @@ async function refresh() {
   alertsById = new Map(alerts.map(a => [a.id, a]));
   suppressedById = new Map(suppressed.map(a => [a.id, a]));
   const whitelistById = new Map(whitelist.map(r => [r.id, r]));
+  lastAlerts = alerts;
+  lastSuppressed = suppressed;
+  lastWhitelistById = whitelistById;
 
   // Drop selections for rows that dropped out of the current page (whitelisted, aged out of the
   // limit, or the rule behind a suppressed row got removed by some other action) — otherwise the
@@ -303,36 +365,7 @@ async function refresh() {
     </div>
   `).join('') || '<div class="empty">No scans recorded yet.</div>';
 
-  const alertsDiv = document.getElementById('alerts');
-  if (alerts.length === 0) {
-    alertsDiv.innerHTML = '<div class="empty">No alerts.</div>';
-  } else {
-    alertsDiv.innerHTML = `
-      <table>
-        <thead><tr><th></th><th>Time</th><th>Module</th><th>Severity</th><th>Summary</th><th></th></tr></thead>
-        <tbody>
-          ${alerts.map(a => `
-            <tr>
-              <td>${
-                WHITELISTABLE_MODULES.includes(a.module)
-                  ? `<input type="checkbox" ${selectedAlertIds.has(a.id) ? 'checked' : ''} onchange="toggleAlertSelect('${a.id}', this.checked)" />`
-                  : ''
-              }</td>
-              <td>${new Date(a.ts).toLocaleString()}</td>
-              <td>${a.module}</td>
-              <td class="sev-${a.severity}">${a.severity}</td>
-              <td>${a.summary}</td>
-              <td id="wl-row-${a.id}">${
-                WHITELISTABLE_MODULES.includes(a.module)
-                  ? `<button onclick="showWhitelistForm('${a.id}')">Whitelist</button>`
-                  : ''
-              }</td>
-            </tr>
-          `).join('')}
-        </tbody>
-      </table>
-    `;
-  }
+  renderAlertsTable();
 
   const whitelistDiv = document.getElementById('whitelist');
   if (whitelist.length === 0) {
@@ -358,43 +391,90 @@ async function refresh() {
     `;
   }
 
-  const suppressedDiv = document.getElementById('suppressed');
-  if (suppressed.length === 0) {
-    suppressedDiv.innerHTML = '<div class="empty">No suppressed events.</div>';
-  } else {
-    suppressedDiv.innerHTML = `
-      <table>
-        <thead><tr><th></th><th>Time</th><th>Module</th><th>Severity</th><th>Summary</th><th>Matched rule</th><th></th></tr></thead>
-        <tbody>
-          ${suppressed.map(a => {
-            const rule = whitelistById.get(a.whitelistRuleId);
-            const ruleLabel = rule ? `${escapeHtml(rule.field)} = ${escapeHtml(rule.value)}` : '(rule removed)';
-            return `
-              <tr>
-                <td>${
-                  rule
-                    ? `<input type="checkbox" ${selectedSuppressedIds.has(a.id) ? 'checked' : ''} onchange="toggleSuppressedSelect('${a.id}', this.checked)" />`
-                    : ''
-                }</td>
-                <td>${new Date(a.ts).toLocaleString()}</td>
-                <td>${a.module}</td>
-                <td class="sev-${a.severity}">${a.severity}</td>
-                <td>${a.summary}</td>
-                <td>${ruleLabel}</td>
-                <td>${
-                  rule
-                    ? `<button onclick="removeRule('${rule.id}')">Unwhitelist</button>`
-                    : ''
-                }</td>
-              </tr>
-            `;
-          }).join('')}
-        </tbody>
-      </table>
-    `;
-  }
+  renderSuppressedTable();
 
   updateBulkButtons();
+}
+
+function renderAlertsTable() {
+  const alertsDiv = document.getElementById('alerts');
+  const rows = lastAlerts.filter(passesFilters);
+  if (lastAlerts.length === 0) {
+    alertsDiv.innerHTML = '<div class="empty">No alerts.</div>';
+    return;
+  }
+  if (rows.length === 0) {
+    alertsDiv.innerHTML = '<div class="empty">No alerts match the current filters.</div>';
+    return;
+  }
+  alertsDiv.innerHTML = `
+    <table>
+      <thead><tr><th></th><th>Time</th><th>Module</th><th>Severity</th><th>Summary</th><th></th></tr></thead>
+      <tbody>
+        ${rows.map(a => `
+          <tr>
+            <td>${
+              WHITELISTABLE_MODULES.includes(a.module)
+                ? `<input type="checkbox" ${selectedAlertIds.has(a.id) ? 'checked' : ''} onchange="toggleAlertSelect('${a.id}', this.checked)" />`
+                : ''
+            }</td>
+            <td>${new Date(a.ts).toLocaleString()}</td>
+            <td>${a.module}</td>
+            <td class="sev-${a.severity}">${a.severity}</td>
+            <td>${a.summary}</td>
+            <td id="wl-row-${a.id}">${
+              WHITELISTABLE_MODULES.includes(a.module)
+                ? `<button onclick="showWhitelistForm('${a.id}')">Whitelist</button>`
+                : ''
+            }</td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+function renderSuppressedTable() {
+  const suppressedDiv = document.getElementById('suppressed');
+  const rows = lastSuppressed.filter(passesFilters);
+  if (lastSuppressed.length === 0) {
+    suppressedDiv.innerHTML = '<div class="empty">No suppressed events.</div>';
+    return;
+  }
+  if (rows.length === 0) {
+    suppressedDiv.innerHTML = '<div class="empty">No suppressed events match the current filters.</div>';
+    return;
+  }
+  suppressedDiv.innerHTML = `
+    <table>
+      <thead><tr><th></th><th>Time</th><th>Module</th><th>Severity</th><th>Summary</th><th>Matched rule</th><th></th></tr></thead>
+      <tbody>
+        ${rows.map(a => {
+          const rule = lastWhitelistById.get(a.whitelistRuleId);
+          const ruleLabel = rule ? `${escapeHtml(rule.field)} = ${escapeHtml(rule.value)}` : '(rule removed)';
+          return `
+            <tr>
+              <td>${
+                rule
+                  ? `<input type="checkbox" ${selectedSuppressedIds.has(a.id) ? 'checked' : ''} onchange="toggleSuppressedSelect('${a.id}', this.checked)" />`
+                  : ''
+              }</td>
+              <td>${new Date(a.ts).toLocaleString()}</td>
+              <td>${a.module}</td>
+              <td class="sev-${a.severity}">${a.severity}</td>
+              <td>${a.summary}</td>
+              <td>${ruleLabel}</td>
+              <td>${
+                rule
+                  ? `<button onclick="removeRule('${rule.id}')">Unwhitelist</button>`
+                  : ''
+              }</td>
+            </tr>
+          `;
+        }).join('')}
+      </tbody>
+    </table>
+  `;
 }
 
 refresh();
