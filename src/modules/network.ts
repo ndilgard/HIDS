@@ -22,32 +22,32 @@ const EPHEMERAL_PORT_MAX = 65535;
 // has actually been observed a few times from it.
 const EPHEMERAL_UDP_TRUST_THRESHOLD = 3;
 
-interface Listener {
+export interface Listener {
 	proto: string;
 	localAddress: string;
 	process: string;
 }
 
-interface OutboundConn {
+export interface OutboundConn {
 	proto: string;
 	localAddress: string;
 	peerAddress: string;
 	process: string;
 }
 
-function extractPort(localAddress: string): number | null {
+export function extractPort(localAddress: string): number | null {
 	const parts = localAddress.split(":");
 	const port = Number(parts[parts.length - 1]);
 	return Number.isFinite(port) ? port : null;
 }
 
-function extractPid(processField: string): number | null {
+export function extractPid(processField: string): number | null {
 	const match = processField.match(/pid=(\d+)/);
 	return match ? Number(match[1]) : null;
 }
 
 /** Strips the port, handling both "1.2.3.4:443" and bracketed IPv6 "[2606:...]:443". */
-function extractDestinationHost(peerAddress: string): string {
+export function extractDestinationHost(peerAddress: string): string {
 	if (peerAddress.startsWith("[")) {
 		const closeIdx = peerAddress.indexOf("]");
 		return closeIdx === -1 ? peerAddress : peerAddress.slice(1, closeIdx);
@@ -58,7 +58,7 @@ function extractDestinationHost(peerAddress: string): string {
 
 /** Expands "::" shorthand to the full 8 hextets, so a subnet prefix can be read positionally
  * regardless of where the compression happened (e.g. "2600:1901:0:92a9::" vs "2001::1234:5678"). */
-function expandIpv6(address: string): string[] {
+export function expandIpv6(address: string): string[] {
 	const [head, tail] = address.split("::");
 	const headParts = head ? head.split(":").filter(Boolean) : [];
 	const tailParts = tail ? tail.split(":").filter(Boolean) : [];
@@ -76,7 +76,7 @@ function expandIpv6(address: string): string[] {
  * rather than pre-guessed. A genuinely new destination in an already-trusted /24 or /48 still
  * won't alert — that's the accepted tradeoff for killing this specific noise source.
  */
-function toSubnetKey(destinationHost: string): string {
+export function toSubnetKey(destinationHost: string): string {
 	if (destinationHost.includes(":")) {
 		return expandIpv6(destinationHost).slice(0, 3).join(":");
 	}
@@ -84,7 +84,7 @@ function toSubnetKey(destinationHost: string): string {
 	return octets.length === 4 ? octets.slice(0, 3).join(".") : destinationHost;
 }
 
-function parseListeners(output: string): Listener[] {
+export function parseListeners(output: string): Listener[] {
 	const lines = output.split("\n").slice(1); // drop header
 	const listeners: Listener[] = [];
 	for (const line of lines) {
@@ -98,12 +98,12 @@ function parseListeners(output: string): Listener[] {
 	return listeners;
 }
 
-function listenerKey(l: Listener): string {
+export function listenerKey(l: Listener): string {
 	return `${l.proto}:${l.localAddress}`;
 }
 
 /** `ss -tnp state established` — no Netid column (already tcp-only): RecvQ SendQ Local Peer Process */
-function parseEstablishedTcp(output: string): OutboundConn[] {
+export function parseEstablishedTcp(output: string): OutboundConn[] {
 	const lines = output.split("\n").slice(1);
 	const conns: OutboundConn[] = [];
 	for (const line of lines) {
@@ -124,7 +124,7 @@ function parseEstablishedTcp(output: string): OutboundConn[] {
 /** `ss -unp` — same layout, but UDP is connectionless so most rows show peer `*:*` (bind-only,
  * already covered by the listener check above); only rows with a real peer represent a UDP
  * socket actually talking somewhere. */
-function parseConnectedUdp(output: string): OutboundConn[] {
+export function parseConnectedUdp(output: string): OutboundConn[] {
 	const lines = output.split("\n").slice(1);
 	const conns: OutboundConn[] = [];
 	for (const line of lines) {

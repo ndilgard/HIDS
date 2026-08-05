@@ -1,18 +1,18 @@
 import { upsertScanStatus } from "../state/history-db.ts";
 import type { Module, ModuleContext } from "./types.ts";
 
-interface JournalEntry {
+export interface JournalEntry {
 	MESSAGE?: string;
 	SYSLOG_IDENTIFIER?: string;
 	__REALTIME_TIMESTAMP?: string;
 }
 
-interface Classified {
+export interface Classified {
 	severity: "warning" | "critical";
 	summary: string;
 }
 
-function classify(entry: JournalEntry): Classified | null {
+export function classify(entry: JournalEntry): Classified | null {
 	const msg = entry.MESSAGE ?? "";
 	const ident = entry.SYSLOG_IDENTIFIER ?? "";
 
@@ -44,7 +44,7 @@ function classify(entry: JournalEntry): Classified | null {
 	return null;
 }
 
-function parseLines(chunk: string): JournalEntry[] {
+export function parseLines(chunk: string): JournalEntry[] {
 	const entries: JournalEntry[] = [];
 	for (const line of chunk.split("\n")) {
 		if (!line.trim()) continue;

@@ -45,6 +45,15 @@ function expandHome(path: string): string {
 	return path;
 }
 
+/** Fills in fields that older config files on disk may not have. Split out from loadConfig() so
+ * the defaulting rules can be unit-tested without touching disk. */
+export function applyConfigDefaults(raw: HidsConfig): HidsConfig {
+	raw.network.alertOnUdp ??= false; // default off — UDP "listeners" are mostly ephemeral app noise (WebRTC/QUIC/DNS)
+	raw.fim.watchTrustedProcessBinaries ??= true;
+	raw.heartbeat ??= { enabled: false, url: "", intervalMs: 120000 };
+	return raw;
+}
+
 export function loadConfig(): HidsConfig {
 	const path = existsSync(CONFIG_PATH) ? CONFIG_PATH : EXAMPLE_CONFIG_PATH;
 	const raw = JSON.parse(readFileSync(path, "utf-8")) as HidsConfig;
@@ -52,9 +61,6 @@ export function loadConfig(): HidsConfig {
 	raw.dataDir = process.env.HIDS_DATA_DIR ?? raw.dataDir;
 	raw.gmailEnvPath = process.env.HIDS_GMAIL_ENV_PATH ?? raw.gmailEnvPath;
 	raw.fim.watchPaths = raw.fim.watchPaths.map(expandHome);
-	raw.network.alertOnUdp ??= false; // default off — UDP "listeners" are mostly ephemeral app noise (WebRTC/QUIC/DNS)
-	raw.fim.watchTrustedProcessBinaries ??= true;
-	raw.heartbeat ??= { enabled: false, url: "", intervalMs: 120000 };
 
-	return raw;
+	return applyConfigDefaults(raw);
 }

@@ -7,7 +7,8 @@
   "scripts": {
     "cli": "bun src/cli.ts",
     "daemon": "bun src/daemon.ts",
-    "dev": "bun --watch src/daemon.ts"
+    "dev": "bun --watch src/daemon.ts",
+    "test": "bun test"
   },
   "dependencies": {
     "nodemailer": "^6.9.0"
