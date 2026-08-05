@@ -79,11 +79,17 @@ export class AlertRecorder {
 			summary: finding.summary,
 			detail: finding.detail,
 		});
-		this.pending.push({ id, finding });
 		console.log(
 			`[alert:${finding.module}] ${finding.severity} — ${finding.summary}`,
 		);
 
+		// Only critical findings are emailed — warning/info still land in the alert store (and
+		// the dashboard) but don't page Nate directly. warning-level network noise ("known
+		// process contacting a new destination") was firing a real email every ~45s: 201 emails
+		// in 2 days, nearly all benign. Dashboard is the review surface for anything non-critical.
+		if (finding.severity !== "critical") return;
+
+		this.pending.push({ id, finding });
 		if (this.timer) clearTimeout(this.timer);
 		this.timer = setTimeout(() => void this.flush(), this.debounceMs);
 	}
