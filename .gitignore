@@ -1,3 +1,6 @@
 node_modules/
 *.log
 .env
+
+# Real config with live secrets (heartbeat ping URL, API key) — never commit these
+config/hids.config.json
