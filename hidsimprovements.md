@@ -25,11 +25,17 @@ A quiet, scheduled email confirming all four modules (FIM, process, auth, networ
 scanning. Today, HIDS is silent by design unless something triggers an alert — which means a
 silent failure in one module could go unnoticed for a long time with no signal either way.
 
-## 4. Automated test suite
+## 4. Automated test suite — DONE
 
-No tests exist yet. Several real bugs this session (UDP `ss` column mis-indexing, the CLI email
-leak) were only caught by live production use, not by any pre-merge check. A test suite covering
-the parsing/detection logic would catch regressions before they reach the actual machine.
+93 `bun:test` tests across 9 files (`4d5aeb9`), prioritized by regression history and real
+security decisions: `network.ts` parsing (incl. a regression test reproducing the exact
+`841710e` UDP column mis-indexing bug — verified it fails against the pre-fix code),
+`auth.ts` classification/parsing, `whitelist-store.ts`'s alert-suppression predicate,
+`link-auth.ts`/`suspicious-process.ts`, `history-db.ts`/`json-store.ts` round-trips via
+temp dirs, `config.ts` defaulting, and an integration-style `fim.ts` test. Scoped to
+parsing/detection logic only — live `fs.watch`, `journalctl -f`, `ss`/`systemctl`
+shell-outs, email sending, the dashboard server, and heartbeat's `fetch()` are still
+untested.
 
 ## 5. Dashboard alert search/filtering — DONE
 
